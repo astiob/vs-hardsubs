@@ -161,6 +161,8 @@ def extract_hardsubs(op, ncop, first, last, top=0, right=0, bottom=0, left=0):
 		credits_alpha = c.std.StackHorizontal([credits_alpha, credits_alpha.std.BlankClip(width=right)])
 		credits_premultiplied = c.std.StackHorizontal([credits_premultiplied, credits_premultiplied.std.BlankClip(width=right)])
 
+	credits_alpha = credits_alpha.std.SetFrameProp('_ColorRange', intval=vs.RANGE_FULL)
+
 #	return credits, credits_alpha, credits_premultiplied
 	return credits_premultiplied, credits_alpha
 
