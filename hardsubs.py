@@ -37,8 +37,8 @@ class LazyLeastSquares:
 				nplanes = planes_per_subsampling[len(a)]
 				height = -(-op.height // (1 + (iplane and op.format.subsampling_h)))
 				width = -(-op.width // (1 + (iplane and op.format.subsampling_w)))
-				a.append(numpy.zeros((op.num_frames * nplanes, 1 + nplanes, height, width), numpy.float32))
-				b.append(numpy.zeros((op.num_frames * nplanes, height, width), numpy.float32))
+				a.append(numpy.zeros((op.num_frames, nplanes, 1 + nplanes, height, width), numpy.float32))
+				b.append(numpy.zeros((op.num_frames, nplanes, height, width), numpy.float32))
 
 #		start = time.monotonic()
 		for iframe, (frame, ncframe) in enumerate(zip(op.frames(), ncop.frames())):
@@ -55,17 +55,17 @@ class LazyLeastSquares:
 				ncplane = ncplane[:, :width*ncframe.format.bytes_per_sample].view(numpy.float32)
 				if op.format.subsampling_h or op.format.subsampling_w:
 					if not iplane:
-						a[0][iframe, 0] = -ncplane
-						a[0][iframe, 1] = 1
-						b[0][iframe] = plane - ncplane
+						a[0][iframe, 0, 0] = -ncplane
+						a[0][iframe, 0, 1] = 1
+						b[0][iframe, 0] = plane - ncplane
 					else:
-						a[1][iframe * 2 + (iplane - 1), 0] = -ncplane
-						a[1][iframe * 2 + (iplane - 1), iplane] = 1
-						b[1][iframe * 2 + (iplane - 1)] = plane - ncplane
+						a[1][iframe, iplane - 1, 0] = -ncplane
+						a[1][iframe, iplane - 1, iplane] = 1
+						b[1][iframe, iplane - 1] = plane - ncplane
 				else:
-					a[0][iframe * op.format.num_planes + iplane, 0] = -ncplane
-					a[0][iframe * op.format.num_planes + iplane, 1 + iplane] = 1
-					b[0][iframe * op.format.num_planes + iplane] = plane - ncplane
+					a[0][iframe, iplane, 0] = -ncplane
+					a[0][iframe, iplane, 1 + iplane] = 1
+					b[0][iframe, iplane] = plane - ncplane
 #		end = time.monotonic()
 #		print(end - start)
 
@@ -73,18 +73,19 @@ class LazyLeastSquares:
 		alphas = []
 		premultiplieds = []
 		for isubsampling in range(len(a)):
+			nplanes = planes_per_subsampling[isubsampling]
 			height = -(-op.height // (1 + (isubsampling and op.format.subsampling_h)))
 			width = -(-op.width // (1 + (isubsampling and op.format.subsampling_w)))
-#			values_planes = [numpy.zeros((height, width), numpy.float32) for i in range(planes_per_subsampling[isubsampling])]
-			premultiplieds_planes = [numpy.zeros((height, width), numpy.float32) for i in range(planes_per_subsampling[isubsampling])]
+#			values_planes = [numpy.zeros((height, width), numpy.float32) for i in range(nplanes)]
+			premultiplieds_planes = [numpy.zeros((height, width), numpy.float32) for i in range(nplanes)]
 			alphas_subsampling = numpy.zeros((height, width), numpy.float32)
 #			values += values_planes
 			premultiplieds += premultiplieds_planes
-			alphas += [alphas_subsampling] * planes_per_subsampling[isubsampling]
+			alphas += [alphas_subsampling] * nplanes
 			for y in range(height):
 				for x in range(width):
-					alpha, *premultiplied_planes = numpy.linalg.lstsq(a[isubsampling][..., y, x], b[isubsampling][..., y, x], rcond=None)[0]
-					for i in range(planes_per_subsampling[isubsampling]):
+					alpha, *premultiplied_planes = numpy.linalg.lstsq(a[isubsampling][..., y, x].reshape(-1, 1 + nplanes), b[isubsampling][..., y, x].reshape(-1), rcond=None)[0]
+					for i in range(nplanes):
 						premultiplied = premultiplied_planes[i]
 #						value = premultiplied / alpha if alpha else 0
 #						values_planes[i][y, x] = value
