@@ -1,5 +1,4 @@
 import vapoursynth as vs
-import ctypes
 import numpy
 #import time
 from dataclasses import dataclass
@@ -11,7 +10,6 @@ __all__ = 'extract_hardsubs', 'reconstruct_hardsubs'
 
 
 c = vs.core
-c_ubyte_p = ctypes.POINTER(ctypes.c_ubyte)
 
 
 @dataclass
@@ -43,16 +41,8 @@ class LazyLeastSquares:
 #		start = time.monotonic()
 		for iframe, (frame, ncframe) in enumerate(zip(op.frames(), ncop.frames())):
 			for iplane in range(op.format.num_planes):
-				height = -(-op.height // (1 + (iplane and op.format.subsampling_h)))
-				width = -(-op.width // (1 + (iplane and op.format.subsampling_w)))
-				plane = ctypes.cast(frame.get_read_ptr(iplane), c_ubyte_p)
-				ncplane = ctypes.cast(ncframe.get_read_ptr(iplane), c_ubyte_p)
-				stride = frame.get_stride(iplane)
-				ncstride = ncframe.get_stride(iplane)
-				plane = numpy.ctypeslib.as_array(plane, (height, stride))
-				ncplane = numpy.ctypeslib.as_array(ncplane, (height, ncstride))
-				plane = plane[:, :width*frame.format.bytes_per_sample].view(numpy.float32)
-				ncplane = ncplane[:, :width*ncframe.format.bytes_per_sample].view(numpy.float32)
+				plane = numpy.asarray(frame[iplane])
+				ncplane = numpy.asarray(ncframe[iplane])
 				if op.format.subsampling_h or op.format.subsampling_w:
 					if not iplane:
 						a[0][iframe, 0, 0] = -ncplane
@@ -124,10 +114,7 @@ def extract_hardsubs(op, ncop, first, last, top=0, right=0, bottom=0, left=0):
 			array = array_producer()
 			f = f.copy()
 			for iplane in range(f.format.num_planes):
-				height = -(-f.height // (1 + (iplane and f.format.subsampling_h)))
-				width = -(-f.width // (1 + (iplane and f.format.subsampling_w)))
-				write = ctypes.cast(f.get_write_ptr(iplane), c_ubyte_p)
-				numpy.ctypeslib.as_array(write, (height, f.get_stride(iplane)))[:, :width*f.format.bytes_per_sample].view(numpy.float32)[:] = array[iplane]
+				numpy.copyto(numpy.asarray(f[iplane]), array[iplane])
 #			end = time.monotonic()
 #			print(end - start)
 			return f
