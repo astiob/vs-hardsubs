@@ -19,14 +19,20 @@ class LazyLeastSquares:
 	planes_per_subsampling: list[int]
 
 	def __post_init__(self):
-		if not (0 < self.op.width == self.ncop.width and 0 < self.op.height == self.ncop.height and None != self.op.format == self.ncop.format and self.op.format.bits_per_sample == 32):
-			raise ValueError('Both input clips must have the same, constant, 32-bit format and size')
+		if not (0 < self.op.width == self.ncop.width and 0 < self.op.height == self.ncop.height and None != self.op.format == self.ncop.format):
+			raise ValueError('Both input clips must have the same, constant format and size')
 
 	@lazy
 	def clips(self):
 		op = self.op
 		ncop = self.ncop
 		planes_per_subsampling = self.planes_per_subsampling
+
+		working_dtype = (
+			numpy.float64 if op.format.bits_per_sample > 32
+			              or op.format.sample_type == vs.INTEGER and op.format.bits_per_sample > 24
+			else numpy.float32
+		)
 
 		a = []
 		b = []
@@ -35,14 +41,15 @@ class LazyLeastSquares:
 				nplanes = planes_per_subsampling[len(a)]
 				height = -(-op.height // (1 + (iplane and op.format.subsampling_h)))
 				width = -(-op.width // (1 + (iplane and op.format.subsampling_w)))
-				a.append(numpy.zeros((op.num_frames, nplanes, 1 + nplanes, height, width), numpy.float32))
-				b.append(numpy.zeros((op.num_frames, nplanes, height, width), numpy.float32))
+				a.append(numpy.zeros((op.num_frames, nplanes, 1 + nplanes, height, width), working_dtype))
+				b.append(numpy.zeros((op.num_frames, nplanes, height, width), working_dtype))
 
 #		start = time.monotonic()
 		for iframe, (frame, ncframe) in enumerate(zip(op.frames(), ncop.frames())):
 			for iplane in range(op.format.num_planes):
 				plane = numpy.asarray(frame[iplane])
 				ncplane = numpy.asarray(ncframe[iplane])
+				plane_dtype = plane.dtype
 				if op.format.subsampling_h or op.format.subsampling_w:
 					if not iplane:
 						a[0][iframe, 0, 0] = -ncplane
@@ -66,12 +73,9 @@ class LazyLeastSquares:
 			nplanes = planes_per_subsampling[isubsampling]
 			height = -(-op.height // (1 + (isubsampling and op.format.subsampling_h)))
 			width = -(-op.width // (1 + (isubsampling and op.format.subsampling_w)))
-#			values_planes = [numpy.zeros((height, width), numpy.float32) for i in range(nplanes)]
-			premultiplieds_planes = [numpy.zeros((height, width), numpy.float32) for i in range(nplanes)]
-			alphas_subsampling = numpy.zeros((height, width), numpy.float32)
-#			values += values_planes
-			premultiplieds += premultiplieds_planes
-			alphas += [alphas_subsampling] * nplanes
+#			values_planes = [numpy.zeros((height, width), working_dtype) for i in range(nplanes)]
+			premultiplieds_planes = [numpy.zeros((height, width), working_dtype) for i in range(nplanes)]
+			alphas_subsampling = numpy.zeros((height, width), working_dtype)
 			for y in range(height):
 				for x in range(width):
 					alpha, *premultiplied_planes = numpy.linalg.lstsq(a[isubsampling][..., y, x].reshape(-1, 1 + nplanes), b[isubsampling][..., y, x].reshape(-1), rcond=None)[0]
@@ -81,8 +85,20 @@ class LazyLeastSquares:
 #						values_planes[i][y, x] = value
 						premultiplieds_planes[i][y, x] = premultiplied
 					alphas_subsampling[y, x] = alpha
+			if op.format.sample_type == vs.INTEGER:
+				peak_value = (1 << op.format.bits_per_sample) - 1
+				alphas_subsampling *= peak_value
+#				for plane in values_planes:
+#					numpy.rint(plane, plane).clip(0, peak_value, plane)
+				for plane in premultiplieds_planes:
+					numpy.rint(plane, plane).clip(0, peak_value, plane)
+				numpy.rint(alphas_subsampling, alphas_subsampling).clip(0, peak_value, alphas_subsampling)
+#			values += [plane.astype(plane_dtype) for plane in values]
+			premultiplieds += [plane.astype(plane_dtype) for plane in premultiplieds_planes]
+			alphas += [alphas_subsampling.astype(plane_dtype)] * nplanes
 #		end = time.monotonic()
 #		print(end - start)
+
 #		return values, alphas, premultiplieds
 		return premultiplieds, alphas
 
