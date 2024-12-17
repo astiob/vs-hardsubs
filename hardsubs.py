@@ -1,3 +1,6 @@
+# Install from pip: lazy
+
+
 import vapoursynth as vs
 import numpy
 #import time
