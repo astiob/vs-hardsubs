@@ -3,7 +3,6 @@ import numpy
 #import time
 from dataclasses import dataclass
 from lazy import lazy
-from vstools import depth
 
 
 __all__ = 'extract_hardsubs', 'reconstruct_hardsubs'
