@@ -106,6 +106,8 @@ class LazyLeastSquares:
 
 
 def extract_hardsubs(op, ncop, first, last, top=0, right=0, bottom=0, left=0):
+	num_frames = op.num_frames
+
 	op = op[first:last+1].std.Crop(top=top, right=right, bottom=bottom, left=left)
 	ncop = ncop[first:last+1].std.Crop(top=top, right=right, bottom=bottom, left=left)
 
@@ -142,9 +144,9 @@ def extract_hardsubs(op, ncop, first, last, top=0, right=0, bottom=0, left=0):
 	credits_alpha = op.std.BlankClip(length=1, keep=True)
 	credits_premultiplied = op.std.BlankClip(length=1, keep=True)
 
-#	credits = credits.std.ModifyFrame(credits, modify_frame(values)) * op.num_frames
-	credits_alpha = credits_alpha.std.ModifyFrame(credits_alpha, modify_frame(alphas)) * op.num_frames
-	credits_premultiplied = credits_premultiplied.std.ModifyFrame(credits_premultiplied, modify_frame(premultiplieds)) * op.num_frames
+#	credits = credits.std.ModifyFrame(credits, modify_frame(values)) * num_frames
+	credits_alpha = credits_alpha.std.ModifyFrame(credits_alpha, modify_frame(alphas)) * num_frames
+	credits_premultiplied = credits_premultiplied.std.ModifyFrame(credits_premultiplied, modify_frame(premultiplieds)) * num_frames
 
 	if top:
 #		credits = c.std.StackVertical([credits.std.BlankClip(height=top), credits])
