@@ -105,11 +105,11 @@ class LazyLeastSquares:
 		return premultiplieds, alphas
 
 
-def extract_hardsubs(op, ncop, first, last, top=0, right=0, bottom=0, left=0):
+def extract_hardsubs(op, ncop, first, last, left=0, right=0, top=0, bottom=0):
 	num_frames = op.num_frames
 
-	op = op[first:last+1].std.Crop(top=top, right=right, bottom=bottom, left=left)
-	ncop = ncop[first:last+1].std.Crop(top=top, right=right, bottom=bottom, left=left)
+	op = op[first:last+1].std.Crop(left=left, right=right, top=top, bottom=bottom)
+	ncop = ncop[first:last+1].std.Crop(left=left, right=right, top=top, bottom=bottom)
 
 	if op.format.subsampling_h or op.format.subsampling_w:
 		planes_per_subsampling = [1, op.format.num_planes - 1]
@@ -171,7 +171,7 @@ def extract_hardsubs(op, ncop, first, last, top=0, right=0, bottom=0, left=0):
 	return credits_premultiplied, credits_alpha
 
 
-def reconstruct_hardsubs(op, ncop, reffirst, reflast, *, clip=None, top=0, right=0, bottom=0, left=0):
-#	credits, credits_alpha, credits_premultiplied = extract_hardsubs(op, ncop, reffirst, reflast, top, right, bottom, left)
-	credits_premultiplied, credits_alpha = extract_hardsubs(op, ncop, reffirst, reflast, top, right, bottom, left)
+def reconstruct_hardsubs(op, ncop, reffirst, reflast, left=0, right=0, top=0, bottom=0, *, clip=None):
+#	credits, credits_alpha, credits_premultiplied = extract_hardsubs(op, ncop, reffirst, reflast, left, right, top, bottom)
+	credits_premultiplied, credits_alpha = extract_hardsubs(op, ncop, reffirst, reflast, left, right, top, bottom)
 	return c.std.MaskedMerge(clip or op, credits_premultiplied, credits_alpha, premultiplied=True)
