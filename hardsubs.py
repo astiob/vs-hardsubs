@@ -44,7 +44,7 @@ class LazyLeastSquares:
 				b.append(numpy.zeros((op.num_frames, nplanes, height, width), working_dtype))
 
 #		start = time.monotonic()
-		for iframe, (frame, ncframe) in enumerate(zip(op.frames(), ncop.frames())):
+		for iframe, (frame, ncframe) in enumerate(zip(op.frames(close=True), ncop.frames(close=True))):
 			for iplane in range(op.format.num_planes):
 				plane = numpy.asarray(frame[iplane])
 				ncplane = numpy.asarray(ncframe[iplane])
