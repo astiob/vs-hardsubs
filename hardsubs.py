@@ -38,8 +38,8 @@ class LazyLeastSquares:
 		for iplane in range(op.format.num_planes):
 			if not iplane or iplane == 1 and (op.format.subsampling_h or op.format.subsampling_w):
 				nplanes = planes_per_subsampling[len(a)]
-				height = -(-op.height // (1 + (iplane and op.format.subsampling_h)))
-				width = -(-op.width // (1 + (iplane and op.format.subsampling_w)))
+				height = op.height >> (iplane and op.format.subsampling_h)
+				width = op.width >> (iplane and op.format.subsampling_w)
 				a.append(numpy.zeros((op.num_frames, nplanes, 1 + nplanes, height, width), working_dtype))
 				b.append(numpy.zeros((op.num_frames, nplanes, height, width), working_dtype))
 
@@ -70,8 +70,8 @@ class LazyLeastSquares:
 		premultiplieds = []
 		for isubsampling in range(len(a)):
 			nplanes = planes_per_subsampling[isubsampling]
-			height = -(-op.height // (1 + (isubsampling and op.format.subsampling_h)))
-			width = -(-op.width // (1 + (isubsampling and op.format.subsampling_w)))
+			height = op.height >> (isubsampling and op.format.subsampling_h)
+			width = op.width >> (isubsampling and op.format.subsampling_w)
 #			values_planes = [numpy.zeros((height, width), working_dtype) for i in range(nplanes)]
 			premultiplieds_planes = [numpy.zeros((height, width), working_dtype) for i in range(nplanes)]
 			alphas_subsampling = numpy.zeros((height, width), working_dtype)
