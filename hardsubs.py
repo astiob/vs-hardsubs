@@ -10,6 +10,11 @@ __all__ = 'extract_hardsubs', 'reconstruct_hardsubs'
 
 @dataclass
 class LazyLeastSquares:
+	"""
+	Wrapper that allows two ``vapoursynth.VideoFrame``s
+	to be produced together in a single deferred/lazy computation.
+	"""
+
 	op: vs.VideoNode
 	ncop: vs.VideoNode
 
