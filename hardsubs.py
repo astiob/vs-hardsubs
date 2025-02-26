@@ -192,8 +192,10 @@ def extract_hardsubs(op, ncop, first, last, left=0, right=0, top=0, bottom=0):
 			return f
 		return callback
 
-	credits_alpha = op.std.BlankClip(length=1, keep=True)
-	credits_premultiplied = op.std.BlankClip(length=1, keep=True)
+	blank = op.std.BlankClip(length=1, keep=True)
+
+	credits_alpha = blank
+	credits_premultiplied = blank
 
 	credits_alpha = credits_alpha.std.ModifyFrame(credits_alpha, modify_frame(alphas)) * num_frames
 	credits_premultiplied = credits_premultiplied.std.ModifyFrame(credits_premultiplied, modify_frame(premultiplieds)) * num_frames
