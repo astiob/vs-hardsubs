@@ -168,6 +168,39 @@ class LazyLeastSquares:
 
 
 def extract_hardsubs(op, ncop, first, last, left=0, right=0, top=0, bottom=0):
+	"""
+	Extract a single static overlay alpha-blended (hardsubbed) onto a sequence of moving frames,
+	given the clean frames and the hardsubbed ones.
+
+	For each individual sample, it is assumed that::
+
+		hardsubbed_sample[frame 0] = overlay*alpha + clean_sample[frame 0]*(1-alpha)
+		hardsubbed_sample[frame 1] = overlay*alpha + clean_sample[frame 1]*(1-alpha)
+		hardsubbed_sample[frame 2] = overlay*alpha + clean_sample[frame 2]*(1-alpha)
+		...
+
+	A least-squares linear regression is run for each sample to find the ``alpha`` and the ``overlay*alpha``.
+	For details, see ``solve`` inside ``LazyLeastSquares.frames``.
+
+	When one overlay is visible on screen and another overlay appears before the first one disappears
+	(e.g. song lyrics and credits during an opening), these overlays should be extracted separately.
+	Draw a rough rectangle that fully encloses each overlay (such that the different overlays' rectangles
+	don't overlap) and pass it in the ``left``, ``right``, ``top``, ``bottom`` parameters as for ``std.Crop``.
+
+	:param op:       Hardsubbed clip (e.g. opening).
+	:param ncop:     Corresponding clean clip (e.g. creditless opening).
+	:param first:    First frame index on which the hardsubbed overlay appears.
+	:param last:     Last frame index on which the hardsubbed overlay appears.
+	:param left:     Number of ignored pixels on the left side of the frame.
+	:param right:    Number of ignored pixels on the right side of the frame.
+	:param top:      Number of ignored pixels on the top side of the frame.
+	:param bottom:   Number of ignored pixels on the bottom side of the frame.
+
+	:return:         A tuple of two clips: the extracted overlay's alpha-premultiplied colors
+	                 and the extracted overlay's alpha mask (defined for each plane).
+	                 These clips are ready to be passed to ``std.MaskedMerge(premultiplied=True)``.
+	"""
+
 	if not (0 < op.width == ncop.width and 0 < op.height == ncop.height and None != op.format == ncop.format):
 		raise ValueError('Both input clips must have the same, constant format and size')
 
