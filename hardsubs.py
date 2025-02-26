@@ -8,9 +8,6 @@ from lazy import lazy
 __all__ = 'extract_hardsubs', 'reconstruct_hardsubs'
 
 
-c = vs.core
-
-
 @dataclass
 class LazyLeastSquares:
 	op: vs.VideoNode
@@ -201,17 +198,17 @@ def extract_hardsubs(op, ncop, first, last, left=0, right=0, top=0, bottom=0):
 	credits_premultiplied = credits_premultiplied.std.ModifyFrame(credits_premultiplied, modify_frame(premultiplieds)) * num_frames
 
 	if top:
-		credits_alpha = c.std.StackVertical([credits_alpha.std.BlankClip(height=top, color=[0]*op.format.num_planes), credits_alpha])
-		credits_premultiplied = c.std.StackVertical([credits_premultiplied.std.BlankClip(height=top), credits_premultiplied])
+		credits_alpha = vs.core.std.StackVertical([credits_alpha.std.BlankClip(height=top, color=[0]*op.format.num_planes), credits_alpha])
+		credits_premultiplied = vs.core.std.StackVertical([credits_premultiplied.std.BlankClip(height=top), credits_premultiplied])
 	if bottom:
-		credits_alpha = c.std.StackVertical([credits_alpha, credits_alpha.std.BlankClip(height=bottom, color=[0]*op.format.num_planes)])
-		credits_premultiplied = c.std.StackVertical([credits_premultiplied, credits_premultiplied.std.BlankClip(height=bottom)])
+		credits_alpha = vs.core.std.StackVertical([credits_alpha, credits_alpha.std.BlankClip(height=bottom, color=[0]*op.format.num_planes)])
+		credits_premultiplied = vs.core.std.StackVertical([credits_premultiplied, credits_premultiplied.std.BlankClip(height=bottom)])
 	if left:
-		credits_alpha = c.std.StackHorizontal([credits_alpha.std.BlankClip(width=left, color=[0]*op.format.num_planes), credits_alpha])
-		credits_premultiplied = c.std.StackHorizontal([credits_premultiplied.std.BlankClip(width=left), credits_premultiplied])
+		credits_alpha = vs.core.std.StackHorizontal([credits_alpha.std.BlankClip(width=left, color=[0]*op.format.num_planes), credits_alpha])
+		credits_premultiplied = vs.core.std.StackHorizontal([credits_premultiplied.std.BlankClip(width=left), credits_premultiplied])
 	if right:
-		credits_alpha = c.std.StackHorizontal([credits_alpha, credits_alpha.std.BlankClip(width=right, color=[0]*op.format.num_planes)])
-		credits_premultiplied = c.std.StackHorizontal([credits_premultiplied, credits_premultiplied.std.BlankClip(width=right)])
+		credits_alpha = vs.core.std.StackHorizontal([credits_alpha, credits_alpha.std.BlankClip(width=right, color=[0]*op.format.num_planes)])
+		credits_premultiplied = vs.core.std.StackHorizontal([credits_premultiplied, credits_premultiplied.std.BlankClip(width=right)])
 
 	credits_alpha = credits_alpha.std.SetFrameProp('_ColorRange', intval=vs.RANGE_FULL)
 
@@ -220,4 +217,4 @@ def extract_hardsubs(op, ncop, first, last, left=0, right=0, top=0, bottom=0):
 
 def reconstruct_hardsubs(op, ncop, reffirst, reflast, left=0, right=0, top=0, bottom=0, *, clip=None):
 	credits_premultiplied, credits_alpha = extract_hardsubs(op, ncop, reffirst, reflast, left, right, top, bottom)
-	return c.std.MaskedMerge(clip or op, credits_premultiplied, credits_alpha, premultiplied=True)
+	return vs.core.std.MaskedMerge(clip or op, credits_premultiplied, credits_alpha, premultiplied=True)
