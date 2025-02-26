@@ -1,6 +1,5 @@
 import vapoursynth as vs
 import numpy
-#import time
 from dataclasses import dataclass
 from lazy import lazy
 
@@ -43,7 +42,6 @@ class LazyLeastSquares:
 				a.append(numpy.zeros((op.num_frames, nplanes, 1 + nplanes, height, width), working_dtype))
 				b.append(numpy.zeros((op.num_frames, nplanes, height, width), working_dtype))
 
-#		start = time.monotonic()
 		for iframe, (frame, ncframe) in enumerate(zip(op.frames(close=True), ncop.frames(close=True))):
 			for iplane in range(op.format.num_planes):
 				plane = numpy.asarray(frame[iplane])
@@ -62,17 +60,13 @@ class LazyLeastSquares:
 					a[0][iframe, iplane, 0] = -ncplane
 					a[0][iframe, iplane, 1 + iplane] = 1
 					b[0][iframe, iplane] = plane - ncplane
-#		end = time.monotonic()
-#		print(end - start)
 
-#		values = []
 		alphas = []
 		premultiplieds = []
 		for isubsampling in range(len(a)):
 			nplanes = planes_per_subsampling[isubsampling]
 			height = op.height >> (isubsampling and op.format.subsampling_h)
 			width = op.width >> (isubsampling and op.format.subsampling_w)
-#			values_planes = [numpy.zeros((height, width), working_dtype) for i in range(nplanes)]
 			premultiplieds_planes = [numpy.zeros((height, width), working_dtype) for i in range(nplanes)]
 			alphas_subsampling = numpy.zeros((height, width), working_dtype)
 			for y in range(height):
@@ -80,25 +74,17 @@ class LazyLeastSquares:
 					alpha, *premultiplied_planes = numpy.linalg.lstsq(a[isubsampling][..., y, x].reshape(-1, 1 + nplanes), b[isubsampling][..., y, x].reshape(-1), rcond=None)[0]
 					for i in range(nplanes):
 						premultiplied = premultiplied_planes[i]
-#						value = premultiplied / alpha if alpha else 0
-#						values_planes[i][y, x] = value
 						premultiplieds_planes[i][y, x] = premultiplied
 					alphas_subsampling[y, x] = alpha
 			if op.format.sample_type == vs.INTEGER:
 				peak_value = (1 << op.format.bits_per_sample) - 1
 				alphas_subsampling *= peak_value
-#				for plane in values_planes:
-#					numpy.rint(plane, plane).clip(0, peak_value, plane)
 				for plane in premultiplieds_planes:
 					numpy.rint(plane, plane).clip(0, peak_value, plane)
 				numpy.rint(alphas_subsampling, alphas_subsampling).clip(0, peak_value, alphas_subsampling)
-#			values += [plane.astype(plane_dtype) for plane in values]
 			premultiplieds += [plane.astype(plane_dtype) for plane in premultiplieds_planes]
 			alphas += [alphas_subsampling.astype(plane_dtype)] * nplanes
-#		end = time.monotonic()
-#		print(end - start)
 
-#		return values, alphas, premultiplieds
 		return premultiplieds, alphas
 
 
@@ -115,60 +101,45 @@ def extract_hardsubs(op, ncop, first, last, left=0, right=0, top=0, bottom=0):
 
 	lstsq = LazyLeastSquares(op, ncop, planes_per_subsampling)
 
-#	def values():
-#		return lstsq.clips[0]
-
 	def alphas():
 		return lstsq.clips[1]
 
 	def premultiplieds():
-#		return lstsq.clips[2]
 		return lstsq.clips[0]
 
 	def modify_frame(array_producer):
 		def callback(n, f):
-#			start = time.monotonic()
 			array = array_producer()
 			f = f.copy()
 			for iplane in range(f.format.num_planes):
 				numpy.copyto(numpy.asarray(f[iplane]), array[iplane])
-#			end = time.monotonic()
-#			print(end - start)
 			return f
 		return callback
 
-#	credits = op.std.BlankClip(length=1, keep=True)
 	credits_alpha = op.std.BlankClip(length=1, keep=True)
 	credits_premultiplied = op.std.BlankClip(length=1, keep=True)
 
-#	credits = credits.std.ModifyFrame(credits, modify_frame(values)) * num_frames
 	credits_alpha = credits_alpha.std.ModifyFrame(credits_alpha, modify_frame(alphas)) * num_frames
 	credits_premultiplied = credits_premultiplied.std.ModifyFrame(credits_premultiplied, modify_frame(premultiplieds)) * num_frames
 
 	if top:
-#		credits = c.std.StackVertical([credits.std.BlankClip(height=top), credits])
 		credits_alpha = c.std.StackVertical([credits_alpha.std.BlankClip(height=top), credits_alpha])
 		credits_premultiplied = c.std.StackVertical([credits_premultiplied.std.BlankClip(height=top), credits_premultiplied])
 	if bottom:
-#		credits = c.std.StackVertical([credits, credits.std.BlankClip(height=bottom)])
 		credits_alpha = c.std.StackVertical([credits_alpha, credits_alpha.std.BlankClip(height=bottom)])
 		credits_premultiplied = c.std.StackVertical([credits_premultiplied, credits_premultiplied.std.BlankClip(height=bottom)])
 	if left:
-#		credits = c.std.StackHorizontal([credits.std.BlankClip(width=left), credits])
 		credits_alpha = c.std.StackHorizontal([credits_alpha.std.BlankClip(width=left), credits_alpha])
 		credits_premultiplied = c.std.StackHorizontal([credits_premultiplied.std.BlankClip(width=left), credits_premultiplied])
 	if right:
-#		credits = c.std.StackHorizontal([credits, credits.std.BlankClip(width=right)])
 		credits_alpha = c.std.StackHorizontal([credits_alpha, credits_alpha.std.BlankClip(width=right)])
 		credits_premultiplied = c.std.StackHorizontal([credits_premultiplied, credits_premultiplied.std.BlankClip(width=right)])
 
 	credits_alpha = credits_alpha.std.SetFrameProp('_ColorRange', intval=vs.RANGE_FULL)
 
-#	return credits, credits_alpha, credits_premultiplied
 	return credits_premultiplied, credits_alpha
 
 
 def reconstruct_hardsubs(op, ncop, reffirst, reflast, left=0, right=0, top=0, bottom=0, *, clip=None):
-#	credits, credits_alpha, credits_premultiplied = extract_hardsubs(op, ncop, reffirst, reflast, left, right, top, bottom)
 	credits_premultiplied, credits_alpha = extract_hardsubs(op, ncop, reffirst, reflast, left, right, top, bottom)
 	return c.std.MaskedMerge(clip or op, credits_premultiplied, credits_alpha, premultiplied=True)
