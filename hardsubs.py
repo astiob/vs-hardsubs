@@ -13,10 +13,6 @@ class LazyLeastSquares:
 	op: vs.VideoNode
 	ncop: vs.VideoNode
 
-	def __post_init__(self):
-		if not (0 < self.op.width == self.ncop.width and 0 < self.op.height == self.ncop.height and None != self.op.format == self.ncop.format):
-			raise ValueError('Both input clips must have the same, constant format and size')
-
 	@lazy
 	def clips(self):
 		op = self.op
@@ -167,6 +163,9 @@ class LazyLeastSquares:
 
 
 def extract_hardsubs(op, ncop, first, last, left=0, right=0, top=0, bottom=0):
+	if not (0 < op.width == ncop.width and 0 < op.height == ncop.height and None != op.format == ncop.format):
+		raise ValueError('Both input clips must have the same, constant format and size')
+
 	num_frames = op.num_frames
 
 	op = op[first:last+1].std.Crop(left=left, right=right, top=top, bottom=bottom)
