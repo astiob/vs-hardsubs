@@ -201,16 +201,16 @@ def extract_hardsubs(op, ncop, first, last, left=0, right=0, top=0, bottom=0):
 	credits_premultiplied = credits_premultiplied.std.ModifyFrame(credits_premultiplied, modify_frame(premultiplieds)) * num_frames
 
 	if top:
-		credits_alpha = c.std.StackVertical([credits_alpha.std.BlankClip(height=top), credits_alpha])
+		credits_alpha = c.std.StackVertical([credits_alpha.std.BlankClip(height=top, color=[0]*op.format.num_planes), credits_alpha])
 		credits_premultiplied = c.std.StackVertical([credits_premultiplied.std.BlankClip(height=top), credits_premultiplied])
 	if bottom:
-		credits_alpha = c.std.StackVertical([credits_alpha, credits_alpha.std.BlankClip(height=bottom)])
+		credits_alpha = c.std.StackVertical([credits_alpha, credits_alpha.std.BlankClip(height=bottom, color=[0]*op.format.num_planes)])
 		credits_premultiplied = c.std.StackVertical([credits_premultiplied, credits_premultiplied.std.BlankClip(height=bottom)])
 	if left:
-		credits_alpha = c.std.StackHorizontal([credits_alpha.std.BlankClip(width=left), credits_alpha])
+		credits_alpha = c.std.StackHorizontal([credits_alpha.std.BlankClip(width=left, color=[0]*op.format.num_planes), credits_alpha])
 		credits_premultiplied = c.std.StackHorizontal([credits_premultiplied.std.BlankClip(width=left), credits_premultiplied])
 	if right:
-		credits_alpha = c.std.StackHorizontal([credits_alpha, credits_alpha.std.BlankClip(width=right)])
+		credits_alpha = c.std.StackHorizontal([credits_alpha, credits_alpha.std.BlankClip(width=right, color=[0]*op.format.num_planes)])
 		credits_premultiplied = c.std.StackHorizontal([credits_premultiplied, credits_premultiplied.std.BlankClip(width=right)])
 
 	credits_alpha = credits_alpha.std.SetFrameProp('_ColorRange', intval=vs.RANGE_FULL)
