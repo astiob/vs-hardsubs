@@ -58,6 +58,78 @@ class LazyLeastSquares:
 				return plane
 
 		def solve(iplane_start, iplane_stop):
+			"""
+			Solve the ordinary least-squares problem for a number of co-sited planes.
+
+			We assume that the authoring studio used a single, static overlay
+			and alpha-blended (hardsubbed) it onto a sequence of moving frames.
+			We have the clean frames and the hardsubbed ones.
+			For each individual sample, we know that::
+
+				hardsubbed_sample[frame 0] = overlay*alpha + clean_sample[frame 0]*(1-alpha)
+				hardsubbed_sample[frame 1] = overlay*alpha + clean_sample[frame 1]*(1-alpha)
+				hardsubbed_sample[frame 2] = overlay*alpha + clean_sample[frame 2]*(1-alpha)
+				...
+
+			So we run a least-squares linear regression for each sample
+			to find the ``alpha`` and the ``overlay*alpha``, and we're done.
+
+			Least-squares problems are usually written as::
+
+				a0 * x + b0 * y = c0
+				a1 * x + b1 * y = c1
+				a2 * x + b2 * y = c2
+				...
+
+			Rearrange our equations to match this form,
+			setting ``b`` to a constant ``1`` for convenience::
+
+				hardsubbed = overlay*alpha + clean*(1-alpha)
+				hardsubbed = overlay*alpha + clean - clean*alpha
+				(-clean) * alpha + 1 * (overlay*alpha) = (hardsubbed-clean)
+
+			thus::
+
+				a = -clean     x = alpha
+				b = 1          y = overlay*alpha
+				c = hardsubbed-clean
+
+			The video clips may have multiple planes (YUV, RGB).
+			We could compute the overlay's alpha mask separately for each plane,
+			but presumably, the authoring studio had a single alpha mask for the whole clip,
+			so we try to restore the single mask by combining data from all planes.
+
+			However, subsampled chroma inevitably uses a subsampled version of the alpha mask.
+			To avoid any additional lossy resampling of the alpha mask,
+			we compute one mask for all the non-subsampled planes
+			and a separate mask for all the subsampled planes,
+			assuming that the subsampled planes are co-sited with each other.
+			Each ``solve`` call corresponds to one of these groups of planes.
+
+			When solving for multiple planes,
+			the combined least-squares problem looks like this::
+
+				a[0]    * alpha + overlay_planeA*alpha                 = c[0]
+				a[1]    * alpha + overlay_planeA*alpha                 = c[1]
+				a[2]    * alpha + overlay_planeA*alpha                 = c[2]
+				...
+				a[N+0]  * alpha         + overlay_planeB*alpha         = c[N+0]
+				a[N+1]  * alpha         + overlay_planeB*alpha         = c[N+1]
+				a[N+2]  * alpha         + overlay_planeB*alpha         = c[N+2]
+				...
+				a[2N+0] * alpha                 + overlay_planeC*alpha = c[2N+0]
+				a[2N+1] * alpha                 + overlay_planeC*alpha = c[2N+1]
+				a[2N+2] * alpha                 + overlay_planeC*alpha = c[2N+2]
+				...
+
+			and the solution consists of the following values::
+
+				alpha
+				overlay_planeA*alpha
+				overlay_planeB*alpha
+				overlay_planeC*alpha
+			"""
+
 			iplane_slice = slice(iplane_start, iplane_stop)
 			iplane_range = range(iplane_start, iplane_stop)
 
