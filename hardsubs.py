@@ -239,12 +239,29 @@ def extract_hardsubs(op, ncop, first, last, left=0, right=0, top=0, bottom=0):
 		left=left, right=right, top=top, bottom=bottom,
 	)
 
-	blank = op.std.BlankClip(length=1, keep=True)
+	credits_alpha = op.std.ModifyFrame(op, lambda n, f: lstsq.frames[1])
+	credits_premultiplied = op.std.ModifyFrame(op, lambda n, f: lstsq.frames[0])
 
-	credits_alpha = blank.std.ModifyFrame(blank, lambda n, f: lstsq.frames[1])
-	credits_premultiplied = blank.std.ModifyFrame(blank, lambda n, f: lstsq.frames[0])
+	prop_names = [
+		'_ChromaLocation',
+		'_Primaries',
+		'_Matrix',
+		'_Transfer',
+		'_AbsoluteTime',
+		'_DurationNum',
+		'_DurationDen',
+		'_SARNum',
+		'_SARDen',
+	]
+	credits_alpha = (credits_alpha
+		.std.CopyFrameProps(op, prop_names)
+		.std.SetFrameProp('_ColorRange', intval=vs.RANGE_FULL)
+		.std.SetFieldBased(vs.FIELD_PROGRESSIVE))
 
-	credits_alpha = credits_alpha.std.SetFrameProp('_ColorRange', intval=vs.RANGE_FULL)
+	prop_names.append('_ColorRange')
+	credits_premultiplied = (credits_premultiplied
+		.std.CopyFrameProps(op, prop_names)
+		.std.SetFieldBased(vs.FIELD_PROGRESSIVE))
 
 	return credits_premultiplied, credits_alpha
 
