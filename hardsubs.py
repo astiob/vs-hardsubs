@@ -40,8 +40,8 @@ class LazyLeastSquares:
 				plane_dot[iplane] -= numpy.multiply(ncplane, val, dtype=numpy.float64)
 			del plane, ncplane
 
-		alphas = []
-		premultiplieds = []
+		alpha_planes = []
+		premultiplied_planes = []
 
 		def adapt_sample_type(plane, alpha=False):
 			if op.format.sample_type == vs.INTEGER:
@@ -143,14 +143,14 @@ class LazyLeastSquares:
 			denominator = op.num_frames * total_sqr_coef - rev_cumsum_sqr_subtotal_coef[-1]
 			n_denominator = op.num_frames * denominator
 
-			alphas.extend([adapt_sample_type((op.num_frames * dot - rev_cumsum_subtotal_prod[-1]) / denominator, alpha=True)] * (iplane_stop - iplane_start))
+			alpha_planes.extend([adapt_sample_type((op.num_frames * dot - rev_cumsum_subtotal_prod[-1]) / denominator, alpha=True)] * (iplane_stop - iplane_start))
 
 			cumsum_sqr_subtotal_coef = 0
 			cumsum_subtotal_prod = 0
 			for iplane in iplane_range:
 				rest_sqr_subtotal_coef = cumsum_sqr_subtotal_coef + rev_cumsum_sqr_subtotal_coef[iplane_stop - 1 - iplane]
 				rest_subtotal_prod = cumsum_subtotal_prod + rev_cumsum_subtotal_prod[iplane_stop - 1 - iplane]
-				premultiplieds.append(adapt_sample_type(
+				premultiplied_planes.append(adapt_sample_type(
 					(total_sqr_coef * plane_subtotal_val[iplane] - dot * plane_subtotal_coef[iplane]) / denominator
 					+ (rest_subtotal_prod * plane_subtotal_coef[iplane] - rest_sqr_subtotal_coef * plane_subtotal_val[iplane]) / n_denominator
 				))
@@ -164,7 +164,7 @@ class LazyLeastSquares:
 		else:
 			solve(0, op.format.num_planes)
 
-		return premultiplieds, alphas
+		return premultiplied_planes, alpha_planes
 
 
 def extract_hardsubs(op, ncop, first, last, left=0, right=0, top=0, bottom=0):
