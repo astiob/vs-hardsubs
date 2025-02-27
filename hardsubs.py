@@ -8,6 +8,20 @@ from lazy import lazy
 __all__ = 'extract_hardsubs', 'reconstruct_hardsubs'
 
 
+def is_limited_range(frame: vs.VideoFrame) -> bool:
+	"""
+	Determine whether a frame would be considered limited-range by ``std.MaskedMerge(premultiplied=True)``.
+	"""
+	is_limited = frame.props.get('_ColorRange')
+	if isinstance(is_limited, list):
+		is_limited = is_limited[0]
+	if isinstance(is_limited, int):
+		is_limited = bool(is_limited)
+	else:
+		is_limited = frame.format.color_family in (vs.YUV, vs.GRAY)
+	return is_limited
+
+
 @dataclass
 class LazyLeastSquares:
 	"""
@@ -24,6 +38,11 @@ class LazyLeastSquares:
 
 	@lazy
 	def frames(self) -> list[vs.VideoNode]:
+		"""
+		For mixed-range integer clips: [alpha, premultiplied_full, premultiplied_limited].
+		In all other cases: [alpha, premultiplied].
+		"""
+
 		op = self.op
 		ncop = self.ncop
 
@@ -31,6 +50,11 @@ class LazyLeastSquares:
 		plane_subtotal_sqr_coef = [0.0] * op.format.num_planes
 		plane_subtotal_val = [0.0] * op.format.num_planes
 		plane_dot = [0.0] * op.format.num_planes
+
+		if op.format.sample_type == vs.INTEGER:
+			have_color_range = [False, False]
+		else:
+			have_color_range = [True, False]
 
 		for iframe, (frame, ncframe) in enumerate(zip(op.frames(close=True), ncop.frames(close=True))):
 			for iplane in range(op.format.num_planes):
@@ -43,9 +67,11 @@ class LazyLeastSquares:
 				plane_subtotal_val[iplane] += val
 				plane_dot[iplane] -= numpy.multiply(ncplane, val, dtype=numpy.float64)
 			del plane, ncplane
+			if op.format.sample_type == vs.INTEGER:
+				have_color_range[is_limited_range(frame)] = True
 
 		alpha_planes = []
-		premultiplied_planes = []
+		premultiplied_planes = [], []
 
 		def adapt_sample_type(plane, alpha=False):
 			if op.format.sample_type == vs.INTEGER:
@@ -147,20 +173,49 @@ class LazyLeastSquares:
 			denominator = op.num_frames * total_sqr_coef - rev_cumsum_sqr_subtotal_coef[-1]
 			n_denominator = op.num_frames * denominator
 
-			alpha_planes.extend([adapt_sample_type((op.num_frames * dot - rev_cumsum_subtotal_prod[-1]) / denominator, alpha=True)] * (iplane_stop - iplane_start))
+			alpha = (op.num_frames * dot - rev_cumsum_subtotal_prod[-1]) / denominator
 
 			cumsum_sqr_subtotal_coef = 0
 			cumsum_subtotal_prod = 0
 			for iplane in iplane_range:
 				rest_sqr_subtotal_coef = cumsum_sqr_subtotal_coef + rev_cumsum_sqr_subtotal_coef[iplane_stop - 1 - iplane]
 				rest_subtotal_prod = cumsum_subtotal_prod + rev_cumsum_subtotal_prod[iplane_stop - 1 - iplane]
-				premultiplied_planes.append(adapt_sample_type(
+				plane = (
 					(total_sqr_coef * plane_subtotal_val[iplane] - dot * plane_subtotal_coef[iplane]) / denominator
 					+ (rest_subtotal_prod * plane_subtotal_coef[iplane] - rest_sqr_subtotal_coef * plane_subtotal_val[iplane]) / n_denominator
-				))
+				)
+
+				if iplane and op.format.sample_type == vs.INTEGER and op.format.color_family == vs.YUV:
+					# Chroma
+					offset = 1 << (op.format.bits_per_sample - 1)
+					plane += offset * (1 - alpha)
+					limited_range_plane = plane
+				elif have_color_range[vs.RANGE_LIMITED]:
+					# Limited-range luma
+					offset = 16 << (op.format.bits_per_sample - 8)
+					limited_range_plane = plane.copy() if have_color_range[vs.RANGE_FULL] else plane
+					limited_range_plane += offset * (1 - alpha)
+				else:
+					# Full-range non-chroma only
+					limited_range_plane = plane
+
+				if plane is limited_range_plane:
+					plane = limited_range_plane = adapt_sample_type(plane)
+				else:
+					plane = adapt_sample_type(plane)
+					limited_range_plane = adapt_sample_type(limited_range_plane)
+
+				if have_color_range[vs.RANGE_LIMITED]:
+					premultiplied_planes[vs.RANGE_LIMITED].append(limited_range_plane)
+				if have_color_range[vs.RANGE_FULL]:
+					premultiplied_planes[vs.RANGE_FULL].append(plane)
+				del plane, limited_range_plane
+
 				if iplane < iplane_stop - 1:
 					cumsum_sqr_subtotal_coef += sqr_subtotal_coef[iplane - iplane_start]
 					cumsum_subtotal_prod += subtotal_prod[iplane - iplane_start]
+
+			alpha_planes.extend([adapt_sample_type(alpha, alpha=True)] * (iplane_stop - iplane_start))
 
 		if op.format.subsampling_h or op.format.subsampling_w:
 			solve(0, 1)
@@ -169,7 +224,7 @@ class LazyLeastSquares:
 			solve(0, op.format.num_planes)
 
 		frames = []
-		for array in premultiplied_planes, alpha_planes:
+		for array in (alpha_planes, *[premultiplied_planes[i] for i in (0, 1) if have_color_range[i]]):
 			frame = vs.core.create_video_frame(op.format, self.left + op.width + self.right, self.top + op.height + self.bottom)
 			frames.append(frame)
 			for iplane in range(op.format.num_planes):
@@ -178,12 +233,14 @@ class LazyLeastSquares:
 				top = self.top >> (iplane and op.format.subsampling_h)
 				bottom = self.bottom >> (iplane and op.format.subsampling_h)
 
-				background = 1 << (op.format.bits_per_sample - 1) if (
-					array is premultiplied_planes
-					and iplane
-					and op.format.color_family == vs.YUV
-					and op.format.sample_type == vs.INTEGER
-				) else 0
+				if array is alpha_planes or op.format.sample_type != vs.INTEGER:
+					background = 0
+				elif iplane and op.format.color_family == vs.YUV:
+					background = 1 << (op.format.bits_per_sample - 1)
+				elif array is premultiplied_planes[vs.RANGE_LIMITED]:
+					background = 16 << (op.format.bits_per_sample - 8)
+				else:
+					background = 0
 
 				outarray = numpy.asarray(frame[iplane])
 				outarray[:top] = background
@@ -241,8 +298,12 @@ def extract_hardsubs(op: vs.VideoNode, ncop: vs.VideoNode,
 		left=left, right=right, top=top, bottom=bottom,
 	)
 
-	credits_alpha = op.std.ModifyFrame(op, lambda n, f: lstsq.frames[1])
-	credits_premultiplied = op.std.ModifyFrame(op, lambda n, f: lstsq.frames[0])
+	credits_alpha = op.std.ModifyFrame(op, lambda n, f: lstsq.frames[0])
+
+	if op.format.sample_type == vs.INTEGER:
+		credits_premultiplied = op.std.ModifyFrame(op, lambda n, f: lstsq.frames[-1 if is_limited_range(f) else 1])
+	else:
+		credits_premultiplied = op.std.ModifyFrame(op, lambda n, f: lstsq.frames[1])
 
 	prop_names = [
 		'_ChromaLocation',
