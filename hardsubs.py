@@ -157,6 +157,72 @@ class LazyLeastSquares:
 				overlay_planeA*alpha
 				overlay_planeB*alpha
 				overlay_planeC*alpha
+
+			We can rewrite this in matrix form::
+
+				M * x = c
+
+			where ``x`` is the solution vector and ``M`` is a matrix
+			containing the ``a`` in the first column plus one column per plane::
+
+				a[0]      1   0   0
+				a[1]      1   0   0
+				a[2]      1   0   0
+				...
+				a[N+0]    0   1   0
+				a[N+1]    0   1   0
+				a[N+2]    0   1   0
+				...
+				a[2N+0]   0   0   1
+				a[2N+1]   0   0   1
+				a[2N+2]   0   0   1
+				...
+
+			To obtain a least-squares solution,
+			left-multiply both sides of the equation by the transpose of ``M``::
+
+				M^T * M * x = M^T * c
+
+			After substituting ``M`` and performing the multiplications, this becomes::
+
+				( sum(all a_i^2)    sum(a_0..N-1)   sum(a_N..2N-1)   sum(a_2N..3N-1) )       ( sum(a_i * c_i)  )
+				( sum(a_0..N-1)     N               0                0               ) * x = ( sum(c_0..N-1)   )
+				( sum(a_N..2N-1)    0               N                0               )       ( sum(c_N..2N-1)  )
+				( sum(a_2N..3N-1)   0               0                N               )       ( sum(c_2N..3N-1) )
+
+			This equation can be solved analytically by inverting the square matrix.
+			It is guaranteed to be invertible unless all a_0..N-1 are equal, all a_N..2N-1 are equal, etc.
+			at the same time, that is, the background behind the hardsubs is completely static:
+			in that case, it's impossible to extract the hardsub overlay with an alpha mask,
+			because there's simply not enough data: only one independent value is observed for each plane,
+			but the sought outputs number one more (one overlay value per plane and additionally one alpha).
+
+			The analytical solution is::
+
+				    ( N (a.c) - A.C                                        )
+				x = ( S C_0 - (a.c) A_0 + ((A.C) A_0 - sum(A_i^2) C_0) / N ) / (N S - sum(A_i^2))
+				    ( S C_1 - (a.c) A_1 + ((A.C) A_1 - sum(A_i^2) C_1) / N )
+				    ( S C_2 - (a.c) A_2 + ((A.C) A_2 - sum(A_i^2) C_2) / N )
+
+			where::
+
+				S   = sum(all a_i^2)
+				A_i = sum(a_iN..iN+N-1)
+				C_i = sum(c_iN..iN+N-1)
+				p.q = sum(p_i * q_i), the dot product of p and q
+
+			As a reminder, ``N`` is the number of frames on which the hardsubbed overlay is present.
+
+			We compute this solution almost directly.
+			To improve numeric stability, observe that in this subtraction::
+
+				  (A.C) A_k - sum(A_i^2) C_k
+				= sum(A_i C_i) A_k - sum(A_i^2) C_k
+				= (... + A_k C_k) A_k - (... + A_k^2) C_k
+
+			the ``k``th terms cancel out.
+			So instead of subtracting the full sums and allowing this cancellation to occur,
+			we compute partial sums and avoid adding the the ``k``th terms in the first place.
 			"""
 
 			iplane_slice = slice(iplane_start, iplane_stop)
