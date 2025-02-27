@@ -272,5 +272,26 @@ def reconstruct_hardsubs(op: vs.VideoNode, ncop: vs.VideoNode,
                          reffirst: int, reflast: int,
                          left: int = 0, right: int = 0, top: int = 0, bottom: int = 0,
                          *, clip: vs.VideoNode | None = None) -> vs.VideoNode:
+	"""
+	Extract a static overlay from one sequence of frames and paste it onto another.
+	See :py:func:`extract_hardsubs` for extraction details.
+
+	This is intended as a convenience wrapper around :py:func:`extract_hardsubs` and ``std.MaskedMerge``
+	to copy hardsubs onto telecined frames that have only one field hardsubbed in the source.
+
+	:param op:         Hardsubbed clip (e.g. opening).
+	:param ncop:       Corresponding clean clip (e.g. creditless opening).
+	:param reffirst:   First frame index on which the hardsubbed overlay appears.
+	:param reflast:    Last frame index on which the hardsubbed overlay appears.
+	:param left:       Number of ignored pixels on the left side of the frame.
+	:param right:      Number of ignored pixels on the right side of the frame.
+	:param top:        Number of ignored pixels on the top side of the frame.
+	:param bottom:     Number of ignored pixels on the bottom side of the frame.
+	:param clip:       Clip to paste the extracted hardsubs onto.
+	                   Defaults to ``op`` for easy repair of half-hardsubbed telecined frames.
+
+	:return:           A copy of ``clip`` augmented with the hardsubs from ``op``.
+	"""
+
 	credits_premultiplied, credits_alpha = extract_hardsubs(op, ncop, reffirst, reflast, left, right, top, bottom)
 	return vs.core.std.MaskedMerge(clip or op, credits_premultiplied, credits_alpha, premultiplied=True)
