@@ -17,9 +17,13 @@ class LazyLeastSquares:
 
 	op: vs.VideoNode
 	ncop: vs.VideoNode
+	left: int
+	right: int
+	top: int
+	bottom: int
 
 	@lazy
-	def clips(self):
+	def frames(self):
 		op = self.op
 		ncop = self.ncop
 
@@ -164,7 +168,31 @@ class LazyLeastSquares:
 		else:
 			solve(0, op.format.num_planes)
 
-		return premultiplied_planes, alpha_planes
+		frames = []
+		for array in premultiplied_planes, alpha_planes:
+			frame = vs.core.create_video_frame(op.format, self.left + op.width + self.right, self.top + op.height + self.bottom)
+			frames.append(frame)
+			for iplane in range(op.format.num_planes):
+				left = self.left >> (iplane and op.format.subsampling_w)
+				right = self.right >> (iplane and op.format.subsampling_w)
+				top = self.top >> (iplane and op.format.subsampling_h)
+				bottom = self.bottom >> (iplane and op.format.subsampling_h)
+
+				background = 1 << (op.format.bits_per_sample - 1) if (
+					array is premultiplied_planes
+					and iplane
+					and op.format.color_family == vs.YUV
+					and op.format.sample_type == vs.INTEGER
+				) else 0
+
+				outarray = numpy.asarray(frame[iplane])
+				outarray[:top] = background
+				outarray[top:-bottom, :left] = background
+				numpy.copyto(outarray[top:-bottom, left:-right], array[iplane])
+				outarray[top:-bottom, -right:] = background
+				outarray[-bottom:] = background
+
+		return frames
 
 
 def extract_hardsubs(op, ncop, first, last, left=0, right=0, top=0, bottom=0):
@@ -204,48 +232,17 @@ def extract_hardsubs(op, ncop, first, last, left=0, right=0, top=0, bottom=0):
 	if not (0 < op.width == ncop.width and 0 < op.height == ncop.height and None != op.format == ncop.format):
 		raise ValueError('Both input clips must have the same, constant format and size')
 
-	num_frames = op.num_frames
-
-	op = op[first:last+1].std.Crop(left=left, right=right, top=top, bottom=bottom)
-	ncop = ncop[first:last+1].std.Crop(left=left, right=right, top=top, bottom=bottom)
-
-	lstsq = LazyLeastSquares(op, ncop)
-
-	def alphas():
-		return lstsq.clips[1]
-
-	def premultiplieds():
-		return lstsq.clips[0]
-
-	def modify_frame(array_producer):
-		def callback(n, f):
-			array = array_producer()
-			f = f.copy()
-			for iplane in range(f.format.num_planes):
-				numpy.copyto(numpy.asarray(f[iplane]), array[iplane])
-			return f
-		return callback
+	# Rely on Crop to validate the crop parameters against the clip's subsampling scheme
+	lstsq = LazyLeastSquares(
+		op[first:last+1].std.Crop(left=left, right=right, top=top, bottom=bottom),
+		ncop[first:last+1].std.Crop(left=left, right=right, top=top, bottom=bottom),
+		left=left, right=right, top=top, bottom=bottom,
+	)
 
 	blank = op.std.BlankClip(length=1, keep=True)
 
-	credits_alpha = blank
-	credits_premultiplied = blank
-
-	credits_alpha = credits_alpha.std.ModifyFrame(credits_alpha, modify_frame(alphas)) * num_frames
-	credits_premultiplied = credits_premultiplied.std.ModifyFrame(credits_premultiplied, modify_frame(premultiplieds)) * num_frames
-
-	if top:
-		credits_alpha = vs.core.std.StackVertical([credits_alpha.std.BlankClip(height=top, color=[0]*op.format.num_planes), credits_alpha])
-		credits_premultiplied = vs.core.std.StackVertical([credits_premultiplied.std.BlankClip(height=top), credits_premultiplied])
-	if bottom:
-		credits_alpha = vs.core.std.StackVertical([credits_alpha, credits_alpha.std.BlankClip(height=bottom, color=[0]*op.format.num_planes)])
-		credits_premultiplied = vs.core.std.StackVertical([credits_premultiplied, credits_premultiplied.std.BlankClip(height=bottom)])
-	if left:
-		credits_alpha = vs.core.std.StackHorizontal([credits_alpha.std.BlankClip(width=left, color=[0]*op.format.num_planes), credits_alpha])
-		credits_premultiplied = vs.core.std.StackHorizontal([credits_premultiplied.std.BlankClip(width=left), credits_premultiplied])
-	if right:
-		credits_alpha = vs.core.std.StackHorizontal([credits_alpha, credits_alpha.std.BlankClip(width=right, color=[0]*op.format.num_planes)])
-		credits_premultiplied = vs.core.std.StackHorizontal([credits_premultiplied, credits_premultiplied.std.BlankClip(width=right)])
+	credits_alpha = blank.std.ModifyFrame(blank, lambda n, f: lstsq.frames[1])
+	credits_premultiplied = blank.std.ModifyFrame(blank, lambda n, f: lstsq.frames[0])
 
 	credits_alpha = credits_alpha.std.SetFrameProp('_ColorRange', intval=vs.RANGE_FULL)
 
