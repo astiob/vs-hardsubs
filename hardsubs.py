@@ -11,7 +11,7 @@ __all__ = 'extract_hardsubs', 'reconstruct_hardsubs'
 @dataclass
 class LazyLeastSquares:
 	"""
-	Wrapper that allows two ``vapoursynth.VideoFrame``s
+	Wrapper that allows two :py:class:`vapoursynth.VideoFrame`s
 	to be produced together in a single deferred/lazy computation.
 	"""
 
@@ -210,7 +210,7 @@ def extract_hardsubs(op: vs.VideoNode, ncop: vs.VideoNode,
 		...
 
 	A least-squares linear regression is run for each sample to find the ``alpha`` and the ``overlay*alpha``.
-	For details, see ``solve`` inside ``LazyLeastSquares.frames``.
+	For details, see ``solve`` inside :py:func:`LazyLeastSquares.frames`.
 
 	When one overlay is visible on screen and another overlay appears before the first one disappears
 	(e.g. song lyrics and credits during an opening), these overlays should be extracted separately.
