@@ -302,9 +302,9 @@ class LazyLeastSquares:
 			frames.append(frame)
 			for iplane in range(op.format.num_planes):
 				left = self.left >> (iplane and op.format.subsampling_w)
-				right = self.right >> (iplane and op.format.subsampling_w)
+				right = (frame.width - self.right) >> (iplane and op.format.subsampling_w)
 				top = self.top >> (iplane and op.format.subsampling_h)
-				bottom = self.bottom >> (iplane and op.format.subsampling_h)
+				bottom = (frame.height - self.bottom) >> (iplane and op.format.subsampling_h)
 
 				if array is alpha_planes or op.format.sample_type != vs.INTEGER:
 					background = 0
@@ -317,10 +317,10 @@ class LazyLeastSquares:
 
 				outarray = numpy.asarray(frame[iplane])
 				outarray[:top] = background
-				outarray[top:-bottom, :left] = background
-				numpy.copyto(outarray[top:-bottom, left:-right], array[iplane])
-				outarray[top:-bottom, -right:] = background
-				outarray[-bottom:] = background
+				outarray[top:bottom, :left] = background
+				numpy.copyto(outarray[top:bottom, left:right], array[iplane])
+				outarray[top:bottom, right:] = background
+				outarray[bottom:] = background
 
 		return frames
 
