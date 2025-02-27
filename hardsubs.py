@@ -35,6 +35,7 @@ class LazyLeastSquares:
 	right: int
 	top: int
 	bottom: int
+	split_chroma: bool
 
 	@lazy
 	def frames(self) -> list[vs.VideoNode]:
@@ -128,7 +129,7 @@ class LazyLeastSquares:
 			so we try to restore the single mask by combining data from all planes.
 
 			However, subsampled chroma inevitably uses a subsampled version of the alpha mask.
-			To avoid any additional lossy resampling of the alpha mask,
+			To avoid any artifacts from lossy resampling of the alpha mask,
 			we compute one mask for all the non-subsampled planes
 			and a separate mask for all the subsampled planes,
 			assuming that the subsampled planes are co-sited with each other.
@@ -217,7 +218,13 @@ class LazyLeastSquares:
 
 			alpha_planes.extend([adapt_sample_type(alpha, alpha=True)] * (iplane_stop - iplane_start))
 
+		split_chroma = self.split_chroma
 		if op.format.subsampling_h or op.format.subsampling_w:
+			split_chroma = True
+		elif op.format.num_planes == 1 or op.format.color_family != vs.YUV:
+			split_chroma = False
+
+		if split_chroma:
 			solve(0, 1)
 			solve(1, op.format.num_planes)
 		else:
@@ -254,7 +261,8 @@ class LazyLeastSquares:
 
 def extract_hardsubs(op: vs.VideoNode, ncop: vs.VideoNode,
                      first: int, last: int,
-                     left: int = 0, right: int = 0, top: int = 0, bottom: int = 0) -> tuple[vs.VideoNode, vs.VideoNode]:
+                     left: int = 0, right: int = 0, top: int = 0, bottom: int = 0,
+                     *, split_chroma: bool = False) -> tuple[vs.VideoNode, vs.VideoNode]:
 	"""
 	Extract a single static overlay alpha-blended (hardsubbed) onto a sequence of moving frames,
 	given the clean frames and the hardsubbed ones.
@@ -274,18 +282,23 @@ def extract_hardsubs(op: vs.VideoNode, ncop: vs.VideoNode,
 	Draw a rough rectangle that fully encloses each overlay (such that the different overlays' rectangles
 	don't overlap) and pass it in the ``left``, ``right``, ``top``, ``bottom`` parameters as for ``std.Crop``.
 
-	:param op:       Hardsubbed clip (e.g. opening).
-	:param ncop:     Corresponding clean clip (e.g. creditless opening).
-	:param first:    First frame index on which the hardsubbed overlay appears.
-	:param last:     Last frame index on which the hardsubbed overlay appears.
-	:param left:     Number of ignored pixels on the left side of the frame.
-	:param right:    Number of ignored pixels on the right side of the frame.
-	:param top:      Number of ignored pixels on the top side of the frame.
-	:param bottom:   Number of ignored pixels on the bottom side of the frame.
+	:param op:             Hardsubbed clip (e.g. opening).
+	:param ncop:           Corresponding clean clip (e.g. creditless opening).
+	:param first:          First frame index on which the hardsubbed overlay appears.
+	:param last:           Last frame index on which the hardsubbed overlay appears.
+	:param left:           Number of ignored pixels on the left side of the frame.
+	:param right:          Number of ignored pixels on the right side of the frame.
+	:param top:            Number of ignored pixels on the top side of the frame.
+	:param bottom:         Number of ignored pixels on the bottom side of the frame.
+	:param split_chroma:   For YUV 4:4:4 clips, whether to compute separate alpha masks for luma and chroma.
+	                       Useful for clips that are not native 4:4:4, where the chroma is blurrier than the luma.
+	                       This parameter is ignored for other input formats:
+	                       subsampled planes are always computed with a separate alpha mask,
+	                       and RGB is always computed with a single mask because chroma can't be separated from luma.
 
-	:return:         A tuple of two clips: the extracted overlay's alpha-premultiplied colors
-	                 and the extracted overlay's alpha mask (defined for each plane).
-	                 These clips are ready to be passed to ``std.MaskedMerge(premultiplied=True)``.
+	:return:               A tuple of two clips: the extracted overlay's alpha-premultiplied colors
+	                       and the extracted overlay's alpha mask (defined for each plane).
+	                       These clips are ready to be passed to ``std.MaskedMerge(premultiplied=True)``.
 	"""
 
 	if not (0 < op.width == ncop.width and 0 < op.height == ncop.height and None != op.format == ncop.format):
@@ -296,6 +309,7 @@ def extract_hardsubs(op: vs.VideoNode, ncop: vs.VideoNode,
 		op[first:last+1].std.Crop(left=left, right=right, top=top, bottom=bottom),
 		ncop[first:last+1].std.Crop(left=left, right=right, top=top, bottom=bottom),
 		left=left, right=right, top=top, bottom=bottom,
+		split_chroma=split_chroma,
 	)
 
 	credits_alpha = op.std.ModifyFrame(op, lambda n, f: lstsq.frames[0])
@@ -332,7 +346,8 @@ def extract_hardsubs(op: vs.VideoNode, ncop: vs.VideoNode,
 def reconstruct_hardsubs(op: vs.VideoNode, ncop: vs.VideoNode,
                          reffirst: int, reflast: int,
                          left: int = 0, right: int = 0, top: int = 0, bottom: int = 0,
-                         *, clip: vs.VideoNode | None = None) -> vs.VideoNode:
+                         *, clip: vs.VideoNode | None = None,
+                         split_chroma: bool = False) -> vs.VideoNode:
 	"""
 	Extract a static overlay from one sequence of frames and paste it onto another.
 	See :py:func:`extract_hardsubs` for extraction details.
@@ -340,18 +355,23 @@ def reconstruct_hardsubs(op: vs.VideoNode, ncop: vs.VideoNode,
 	This is intended as a convenience wrapper around :py:func:`extract_hardsubs` and ``std.MaskedMerge``
 	to copy hardsubs onto telecined frames that have only one field hardsubbed in the source.
 
-	:param op:         Hardsubbed clip (e.g. opening).
-	:param ncop:       Corresponding clean clip (e.g. creditless opening).
-	:param reffirst:   First frame index on which the hardsubbed overlay appears.
-	:param reflast:    Last frame index on which the hardsubbed overlay appears.
-	:param left:       Number of ignored pixels on the left side of the frame.
-	:param right:      Number of ignored pixels on the right side of the frame.
-	:param top:        Number of ignored pixels on the top side of the frame.
-	:param bottom:     Number of ignored pixels on the bottom side of the frame.
-	:param clip:       Clip to paste the extracted hardsubs onto.
-	                   Defaults to ``op`` for easy repair of half-hardsubbed telecined frames.
+	:param op:             Hardsubbed clip (e.g. opening).
+	:param ncop:           Corresponding clean clip (e.g. creditless opening).
+	:param reffirst:       First frame index on which the hardsubbed overlay appears.
+	:param reflast:        Last frame index on which the hardsubbed overlay appears.
+	:param left:           Number of ignored pixels on the left side of the frame.
+	:param right:          Number of ignored pixels on the right side of the frame.
+	:param top:            Number of ignored pixels on the top side of the frame.
+	:param bottom:         Number of ignored pixels on the bottom side of the frame.
+	:param clip:           Clip to paste the extracted hardsubs onto.
+	                       Defaults to ``op`` for easy repair of half-hardsubbed telecined frames.
+	:param split_chroma:   For YUV 4:4:4 clips, whether to compute separate alpha masks for luma and chroma.
+	                       Useful for clips that are not native 4:4:4, where the chroma is blurrier than the luma.
+	                       This parameter is ignored for other input formats:
+	                       subsampled planes are always computed with a separate alpha mask,
+	                       and RGB is always computed with a single mask because chroma can't be separated from luma.
 
-	:return:           A copy of ``clip`` augmented with the hardsubs from ``op``.
+	:return:               A copy of ``clip`` augmented with the hardsubs from ``op``.
 	"""
 
 	credits_premultiplied, credits_alpha = extract_hardsubs(op, ncop, reffirst, reflast, left, right, top, bottom)
