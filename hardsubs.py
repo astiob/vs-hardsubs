@@ -23,7 +23,7 @@ class LazyLeastSquares:
 	bottom: int
 
 	@lazy
-	def frames(self):
+	def frames(self) -> list[vs.VideoNode]:
 		op = self.op
 		ncop = self.ncop
 
@@ -195,7 +195,9 @@ class LazyLeastSquares:
 		return frames
 
 
-def extract_hardsubs(op, ncop, first, last, left=0, right=0, top=0, bottom=0):
+def extract_hardsubs(op: vs.VideoNode, ncop: vs.VideoNode,
+                     first: int, last: int,
+                     left: int = 0, right: int = 0, top: int = 0, bottom: int = 0) -> tuple[vs.VideoNode, vs.VideoNode]:
 	"""
 	Extract a single static overlay alpha-blended (hardsubbed) onto a sequence of moving frames,
 	given the clean frames and the hardsubbed ones.
@@ -266,6 +268,9 @@ def extract_hardsubs(op, ncop, first, last, left=0, right=0, top=0, bottom=0):
 	return credits_premultiplied, credits_alpha
 
 
-def reconstruct_hardsubs(op, ncop, reffirst, reflast, left=0, right=0, top=0, bottom=0, *, clip=None):
+def reconstruct_hardsubs(op: vs.VideoNode, ncop: vs.VideoNode,
+                         reffirst: int, reflast: int,
+                         left: int = 0, right: int = 0, top: int = 0, bottom: int = 0,
+                         *, clip: vs.VideoNode | None = None) -> vs.VideoNode:
 	credits_premultiplied, credits_alpha = extract_hardsubs(op, ncop, reffirst, reflast, left, right, top, bottom)
 	return vs.core.std.MaskedMerge(clip or op, credits_premultiplied, credits_alpha, premultiplied=True)
