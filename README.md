@@ -9,6 +9,8 @@ that have the same overlay hardsubbed on top of a dynamic background.
 Pass the first and last frame on which the overlay appears and a crop
 rectangle that surrounds the overlay.
 
+[See this example for illustration.](https://slow.pics/c/DjoiJrIz)
+
 `extract_hardsubs` returns the overlay itself as a pair of clips:
 `(premultipliedalpha_overlay, alpha_mask)`. You can then apply it
 to another clip with `std.MaskedMerge`.
