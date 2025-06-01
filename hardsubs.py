@@ -322,6 +322,9 @@ class LazyLeastSquares:
 				outarray[top:bottom, right:] = background
 				outarray[bottom:] = background
 
+		# We no longer need these, so delete them to allow them to be released if we're holding the only reference
+		del self.op, self.ncop
+
 		return frames
 
 
