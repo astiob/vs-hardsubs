@@ -447,3 +447,77 @@ def reconstruct_hardsubs(op: vs.VideoNode, ncop: vs.VideoNode,
 
 	credits_premultiplied, credits_alpha = extract_hardsubs(op, ncop, reffirst, reflast, left, right, top, bottom)
 	return vs.core.std.MaskedMerge(clip or op, credits_premultiplied, credits_alpha, premultiplied=True)
+
+
+def masked_unmerge(clipa: vs.VideoNode, clipb: vs.VideoNode, mask: vs.VideoNode,
+                   planes: int | list[int] | None = None, premultiplied: bool = False) -> vs.VideoNode:
+	fmt = clipa.format
+	if not (0 < clipa.width == clipb.width and 0 < clipa.height == clipb.height and None != fmt == clipb.format):
+		raise ValueError('masked_unmerge: both clips must have the same constant format and dimensions, '
+			f'passed {clipa.format.name}[{clipa.width}x{clipa.height}] and {clipb.format.name}[{clipb.width}x{clipb.height}]')
+
+	alpha_norm_expr = f'{(1 << mask.format.bits_per_sample) - 1} /' if mask.format.sample_type == vs.INTEGER else ''
+	expr_func = core.std.Expr
+	if premultiplied:
+		if fmt.sample_type == vs.INTEGER:
+			expr_func = core.akarin.Expr  # for frame prop access
+			level_exprs = [f'{16 << (fmt.bits_per_sample - 8)} y._ColorRange * +']
+			if fmt.color_family == vs.YUV:
+				level_exprs.append(f'{1 << (fmt.bits_per_sample - 1)} +')
+		else:
+			level_exprs = ['']
+		core_expr = f'x y - 1 z {alpha_norm_expr} - /'
+		exprs = [f'{core_expr} {level_expr}' for level_expr in level_exprs]
+	else:
+		exprs = [f'z {alpha_norm_expr} dup y * x - swap 1 - /']
+
+	if planes is not None:
+		if isinstance(planes, int):
+			planes = planes,
+		if max(planes) > fmt.num_planes:
+			raise ValueError('masked_unmerge: plane index out of range')
+		set_planes = frozenset(planes)
+		if len(set_planes) != len(planes):
+			raise ValueError('masked_unmerge: plane specified twice')
+		excl_planes = frozenset(range(fmt.num_planes)) - set_planes
+		if excl_planes:
+			exprs += exprs[-1:] * (fmt.num_planes - len(exprs))
+			for iplane in excl_planes:
+				exprs[iplane] = ''
+
+	return expr_func([clipa, clipb, mask], exprs)
+
+
+class Delogo:
+	premultiplied: vs.VideoNode
+	alpha: vs.VideoNode
+
+	def __init__(self, training_withlogo: list[vs.VideoNode], training_clean: list[vs.VideoNode],
+	             *, split_chroma: bool = False):
+		n = training_withlogo.num_frames
+		if n != training_clean.num_frames:
+			raise ValueError('Delogo: training clips must have the same number of frames with and without the logo')
+		training_withlogo = training_withlogo.std.SetFrameProp('_ColorRange', vs.RANGE_FULL)
+		self.premultiplied, self.alpha = extract_hardsubs(training_withlogo, training_clean, 0, n - 1, split_chroma=split_chroma)
+
+	def delogo(self, withlogo: vs.VideoNode) -> vs.VideoNode:
+		# Effectively:
+		# return masked_unmerge(withlogo, self.premultiplied, self.alpha, premultiplied=True)
+
+		premult = self.premultiplied
+		fmt = premult.format
+		if not (0 < premult.width == withlogo.width and 0 < premult.height == withlogo.height and None != fmt == withlogo.format):
+			raise ValueError('delogo: all clips must have the same constant format and dimensions, '
+				f'passed {premult.format.name}[{premult.width}x{premult.height}] and {withlogo.format.name}[{withlogo.width}x{withlogo.height}]')
+
+		if fmt.sample_type == vs.INTEGER:
+			alpha_norm_expr = f'{(1 << fmt.bits_per_sample) - 1} /'
+			level_exprs = ['']
+			if fmt.color_family == vs.YUV:
+				level_exprs.append(f'{1 << (fmt.bits_per_sample - 1)} +')
+		else:
+			alpha_norm_expr = ''
+			level_exprs = ['']
+		core_expr = f'x y - 1 z {alpha_norm_expr} - /'
+		exprs = [f'{core_expr} {level_expr}' for level_expr in level_exprs]
+		return core.std.Expr([withlogo, premult, self.alpha], exprs)
