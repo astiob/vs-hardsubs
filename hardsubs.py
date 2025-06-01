@@ -287,7 +287,7 @@ class LazyLeastSquares:
 		split_chroma = self.split_chroma
 		if op.format.subsampling_h or op.format.subsampling_w:
 			split_chroma = True
-		elif op.format.num_planes == 1 or op.format.color_family != vs.YUV:
+		elif op.format.color_family != vs.YUV:
 			split_chroma = False
 
 		if split_chroma:
