@@ -379,7 +379,8 @@ def extract_hardsubs(op: vs.VideoNode, ncop: vs.VideoNode,
 	"""
 
 	if not (0 < op.width == ncop.width and 0 < op.height == ncop.height and None != op.format == ncop.format):
-		raise ValueError('Both input clips must have the same, constant format and size')
+		raise ValueError('extract_hardsubs: both clips must have the same constant format and dimensions, '
+			f'passed {op.format.name}[{op.width}x{op.height}] and {ncop.format.name}[{ncop.width}x{ncop.height}]')
 
 	# Rely on Crop to validate the crop parameters against the clip's subsampling scheme
 	lstsq = LazyLeastSquares(
