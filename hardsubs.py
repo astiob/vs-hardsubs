@@ -305,6 +305,8 @@ class LazyLeastSquares:
 			props['_FieldBased'] = vs.FIELD_PROGRESSIVE
 			if array is alpha_planes:
 				props['_ColorRange'] = vs.RANGE_FULL
+			elif op.format.sample_type == vs.INTEGER:
+				props['_ColorRange'] = premultiplied_planes.index(array)
 
 			for iplane in range(op.format.num_planes):
 				left = self.left >> (iplane and op.format.subsampling_w)
@@ -408,7 +410,6 @@ def extract_hardsubs(op: vs.VideoNode, ncop: vs.VideoNode,
 	credits_alpha = (credits_alpha
 		.std.CopyFrameProps(op, prop_names))
 
-	prop_names.append('_ColorRange')
 	credits_premultiplied = (credits_premultiplied
 		.std.CopyFrameProps(op, prop_names))
 
