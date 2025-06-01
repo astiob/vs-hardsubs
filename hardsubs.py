@@ -407,11 +407,8 @@ def extract_hardsubs(op: vs.VideoNode, ncop: vs.VideoNode,
 		'_SARNum',
 		'_SARDen',
 	]
-	credits_alpha = (credits_alpha
-		.std.CopyFrameProps(op, prop_names))
-
-	credits_premultiplied = (credits_premultiplied
-		.std.CopyFrameProps(op, prop_names))
+	credits_alpha = credits_alpha.std.CopyFrameProps(op, prop_names)
+	credits_premultiplied = credits_premultiplied.std.CopyFrameProps(op, prop_names)
 
 	return credits_premultiplied, credits_alpha
 
