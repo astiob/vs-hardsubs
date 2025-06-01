@@ -300,6 +300,12 @@ class LazyLeastSquares:
 		for array in (alpha_planes, *[premultiplied_planes[i] for i in (0, 1) if have_color_range[i]]):
 			frame = vs.core.create_video_frame(op.format, self.left + op.width + self.right, self.top + op.height + self.bottom)
 			frames.append(frame)
+
+			props = frame.props
+			props['_FieldBased'] = vs.FIELD_PROGRESSIVE
+			if array is alpha_planes:
+				props['_ColorRange'] = vs.RANGE_FULL
+
 			for iplane in range(op.format.num_planes):
 				left = self.left >> (iplane and op.format.subsampling_w)
 				right = (frame.width - self.right) >> (iplane and op.format.subsampling_w)
@@ -400,14 +406,11 @@ def extract_hardsubs(op: vs.VideoNode, ncop: vs.VideoNode,
 		'_SARDen',
 	]
 	credits_alpha = (credits_alpha
-		.std.CopyFrameProps(op, prop_names)
-		.std.SetFrameProp('_ColorRange', intval=vs.RANGE_FULL)
-		.std.SetFieldBased(vs.FIELD_PROGRESSIVE))
+		.std.CopyFrameProps(op, prop_names))
 
 	prop_names.append('_ColorRange')
 	credits_premultiplied = (credits_premultiplied
-		.std.CopyFrameProps(op, prop_names)
-		.std.SetFieldBased(vs.FIELD_PROGRESSIVE))
+		.std.CopyFrameProps(op, prop_names))
 
 	return credits_premultiplied, credits_alpha
 
