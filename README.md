@@ -1,6 +1,8 @@
 # Dependencies
 
-`pip install lazy`
+Only Python, VapourSynth and NumPy.
+
+Older versions required the `lazy` PyPi package, but it is no longer used.
 
 # Usage
 

@@ -2,7 +2,7 @@ import vapoursynth as vs
 import numpy
 from dataclasses import dataclass
 from itertools import accumulate
-from lazy import lazy
+from threading import Lock
 
 
 __all__ = 'extract_hardsubs', 'reconstruct_hardsubs'
@@ -37,303 +37,316 @@ class LazyLeastSquares:
 	bottom: int
 	split_chroma: bool
 
-	@lazy
+	_lock = Lock()
+	_frames: list[vs.VideoNode] = None
+
+	@property
 	def frames(self) -> list[vs.VideoNode]:
 		"""
 		For mixed-range integer clips: [alpha, premultiplied_full, premultiplied_limited].
 		In all other cases: [alpha, premultiplied].
 		"""
 
-		op = self.op
-		ncop = self.ncop
+		frames = self._frames
+		if frames is not None:
+			return frames
 
-		plane_subtotal_coef = [0.0] * op.format.num_planes
-		plane_subtotal_sqr_coef = [0.0] * op.format.num_planes
-		plane_subtotal_val = [0.0] * op.format.num_planes
-		plane_dot = [0.0] * op.format.num_planes
+		with self._lock:
+			frames = self._frames
+			if frames is not None:
+				return frames
 
-		if op.format.sample_type == vs.INTEGER:
-			have_color_range = [False, False]
-		else:
-			have_color_range = [True, False]
+			op = self.op
+			ncop = self.ncop
 
-		for iframe, (frame, ncframe) in enumerate(zip(op.frames(close=True), ncop.frames(close=True))):
-			for iplane in range(op.format.num_planes):
-				plane = numpy.asarray(frame[iplane])
-				ncplane = numpy.asarray(ncframe[iplane])
-				input_dtype = plane.dtype
-				plane_subtotal_coef[iplane] -= ncplane
-				plane_subtotal_sqr_coef[iplane] += numpy.square(ncplane, dtype=numpy.float64)
-				val = numpy.subtract(plane, ncplane, dtype=numpy.float64)
-				plane_subtotal_val[iplane] += val
-				plane_dot[iplane] -= numpy.multiply(ncplane, val, dtype=numpy.float64)
-			del plane, ncplane
+			plane_subtotal_coef = [0.0] * op.format.num_planes
+			plane_subtotal_sqr_coef = [0.0] * op.format.num_planes
+			plane_subtotal_val = [0.0] * op.format.num_planes
+			plane_dot = [0.0] * op.format.num_planes
+
 			if op.format.sample_type == vs.INTEGER:
-				have_color_range[is_limited_range(frame)] = True
-
-		alpha_planes = []
-		premultiplied_planes = [], []
-
-		def adapt_sample_type(plane, alpha=False):
-			if op.format.sample_type == vs.INTEGER:
-				peak_value = (1 << op.format.bits_per_sample) - 1
-				if alpha:
-					plane *= peak_value
-				return (numpy
-					.rint(plane, plane)
-					.clip(0, peak_value, plane)
-					.astype(input_dtype))
+				have_color_range = [False, False]
 			else:
-				return plane
+				have_color_range = [True, False]
 
-		def solve(iplane_start, iplane_stop):
-			"""
-			Solve the ordinary least-squares problem for a number of co-sited planes.
+			for iframe, (frame, ncframe) in enumerate(zip(op.frames(close=True), ncop.frames(close=True))):
+				for iplane in range(op.format.num_planes):
+					plane = numpy.asarray(frame[iplane])
+					ncplane = numpy.asarray(ncframe[iplane])
+					input_dtype = plane.dtype
+					plane_subtotal_coef[iplane] -= ncplane
+					plane_subtotal_sqr_coef[iplane] += numpy.square(ncplane, dtype=numpy.float64)
+					val = numpy.subtract(plane, ncplane, dtype=numpy.float64)
+					plane_subtotal_val[iplane] += val
+					plane_dot[iplane] -= numpy.multiply(ncplane, val, dtype=numpy.float64)
+				del plane, ncplane
+				if op.format.sample_type == vs.INTEGER:
+					have_color_range[is_limited_range(frame)] = True
 
-			We assume that the authoring studio used a single, static overlay
-			and alpha-blended (hardsubbed) it onto a sequence of moving frames.
-			We have the clean frames and the hardsubbed ones.
-			For each individual sample, we know that::
+			alpha_planes = []
+			premultiplied_planes = [], []
 
-				hardsubbed_sample[frame 0] = overlay*alpha + clean_sample[frame 0]*(1-alpha)
-				hardsubbed_sample[frame 1] = overlay*alpha + clean_sample[frame 1]*(1-alpha)
-				hardsubbed_sample[frame 2] = overlay*alpha + clean_sample[frame 2]*(1-alpha)
-				...
-
-			So we run a least-squares linear regression for each sample
-			to find the ``alpha`` and the ``overlay*alpha``, and we're done.
-
-			Least-squares problems are usually written as::
-
-				a0 * x + b0 * y = c0
-				a1 * x + b1 * y = c1
-				a2 * x + b2 * y = c2
-				...
-
-			Rearrange our equations to match this form,
-			setting ``b`` to a constant ``1`` for convenience::
-
-				hardsubbed = overlay*alpha + clean*(1-alpha)
-				hardsubbed = overlay*alpha + clean - clean*alpha
-				(-clean) * alpha + 1 * (overlay*alpha) = (hardsubbed-clean)
-
-			thus::
-
-				a = -clean     x = alpha
-				b = 1          y = overlay*alpha
-				c = hardsubbed-clean
-
-			The video clips may have multiple planes (YUV, RGB).
-			We could compute the overlay's alpha mask separately for each plane,
-			but presumably, the authoring studio had a single alpha mask for the whole clip,
-			so we try to restore the single mask by combining data from all planes.
-
-			However, subsampled chroma inevitably uses a subsampled version of the alpha mask.
-			To avoid any artifacts from lossy resampling of the alpha mask,
-			we compute one mask for all the non-subsampled planes
-			and a separate mask for all the subsampled planes,
-			assuming that the subsampled planes are co-sited with each other.
-			Each ``solve`` call corresponds to one of these groups of planes.
-
-			When solving for multiple planes,
-			the combined least-squares problem looks like this::
-
-				a[0]    * alpha + overlay_planeA*alpha                 = c[0]
-				a[1]    * alpha + overlay_planeA*alpha                 = c[1]
-				a[2]    * alpha + overlay_planeA*alpha                 = c[2]
-				...
-				a[N+0]  * alpha         + overlay_planeB*alpha         = c[N+0]
-				a[N+1]  * alpha         + overlay_planeB*alpha         = c[N+1]
-				a[N+2]  * alpha         + overlay_planeB*alpha         = c[N+2]
-				...
-				a[2N+0] * alpha                 + overlay_planeC*alpha = c[2N+0]
-				a[2N+1] * alpha                 + overlay_planeC*alpha = c[2N+1]
-				a[2N+2] * alpha                 + overlay_planeC*alpha = c[2N+2]
-				...
-
-			and the solution consists of the following values::
-
-				alpha
-				overlay_planeA*alpha
-				overlay_planeB*alpha
-				overlay_planeC*alpha
-
-			We can rewrite this in matrix form::
-
-				M * x = c
-
-			where ``x`` is the solution vector and ``M`` is a matrix
-			containing the ``a`` in the first column plus one column per plane::
-
-				a[0]      1   0   0
-				a[1]      1   0   0
-				a[2]      1   0   0
-				...
-				a[N+0]    0   1   0
-				a[N+1]    0   1   0
-				a[N+2]    0   1   0
-				...
-				a[2N+0]   0   0   1
-				a[2N+1]   0   0   1
-				a[2N+2]   0   0   1
-				...
-
-			To obtain a least-squares solution,
-			left-multiply both sides of the equation by the transpose of ``M``::
-
-				M^T * M * x = M^T * c
-
-			After substituting ``M`` and performing the multiplications, this becomes::
-
-				( sum(all a_i^2)    sum(a_0..N-1)   sum(a_N..2N-1)   sum(a_2N..3N-1) )       ( sum(a_i * c_i)  )
-				( sum(a_0..N-1)     N               0                0               ) * x = ( sum(c_0..N-1)   )
-				( sum(a_N..2N-1)    0               N                0               )       ( sum(c_N..2N-1)  )
-				( sum(a_2N..3N-1)   0               0                N               )       ( sum(c_2N..3N-1) )
-
-			This equation can be solved analytically by inverting the square matrix.
-			It is guaranteed to be invertible unless all a_0..N-1 are equal, all a_N..2N-1 are equal, etc.
-			at the same time, that is, the background behind the hardsubs is completely static:
-			in that case, it's impossible to extract the hardsub overlay with an alpha mask,
-			because there's simply not enough data: only one independent value is observed for each plane,
-			but the sought outputs number one more (one overlay value per plane and additionally one alpha).
-
-			The analytical solution is::
-
-				    ( N (a.c) - A.C                                        )
-				x = ( S C_0 - (a.c) A_0 + ((A.C) A_0 - sum(A_i^2) C_0) / N ) / (N S - sum(A_i^2))
-				    ( S C_1 - (a.c) A_1 + ((A.C) A_1 - sum(A_i^2) C_1) / N )
-				    ( S C_2 - (a.c) A_2 + ((A.C) A_2 - sum(A_i^2) C_2) / N )
-
-			where::
-
-				S   = sum(all a_i^2)
-				A_i = sum(a_iN..iN+N-1)
-				C_i = sum(c_iN..iN+N-1)
-				p.q = sum(p_i * q_i), the dot product of p and q
-
-			As a reminder, ``N`` is the number of frames on which the hardsubbed overlay is present.
-
-			We compute this solution almost directly.
-			To improve numeric stability, observe that in this subtraction::
-
-				  (A.C) A_k - sum(A_i^2) C_k
-				= sum(A_i C_i) A_k - sum(A_i^2) C_k
-				= (... + A_k C_k) A_k - (... + A_k^2) C_k
-
-			the ``k``th terms cancel out.
-			So instead of subtracting the full sums and allowing this cancellation to occur,
-			we compute partial sums and avoid adding the the ``k``th terms in the first place.
-			"""
-
-			iplane_slice = slice(iplane_start, iplane_stop)
-			iplane_range = range(iplane_start, iplane_stop)
-
-			total_sqr_coef = sum(plane_subtotal_sqr_coef[iplane_slice])
-			dot = sum(plane_dot[iplane_slice])
-
-			sqr_subtotal_coef = [plane_subtotal_coef[iplane] ** 2 for iplane in iplane_range]
-			subtotal_prod = [plane_subtotal_coef[iplane] * plane_subtotal_val[iplane] for iplane in iplane_range]
-
-			rev_cumsum_sqr_subtotal_coef = list(accumulate(reversed(sqr_subtotal_coef), initial=0))
-			rev_cumsum_subtotal_prod = list(accumulate(reversed(subtotal_prod), initial=0))
-
-			denominator = op.num_frames * total_sqr_coef - rev_cumsum_sqr_subtotal_coef[-1]
-			n_denominator = op.num_frames * denominator
-
-			alpha = (op.num_frames * dot - rev_cumsum_subtotal_prod[-1]) / denominator
-
-			cumsum_sqr_subtotal_coef = 0
-			cumsum_subtotal_prod = 0
-			for iplane in iplane_range:
-				rest_sqr_subtotal_coef = cumsum_sqr_subtotal_coef + rev_cumsum_sqr_subtotal_coef[iplane_stop - 1 - iplane]
-				rest_subtotal_prod = cumsum_subtotal_prod + rev_cumsum_subtotal_prod[iplane_stop - 1 - iplane]
-				plane = (
-					(total_sqr_coef * plane_subtotal_val[iplane] - dot * plane_subtotal_coef[iplane]) / denominator
-					+ (rest_subtotal_prod * plane_subtotal_coef[iplane] - rest_sqr_subtotal_coef * plane_subtotal_val[iplane]) / n_denominator
-				)
-
-				if iplane and op.format.sample_type == vs.INTEGER and op.format.color_family == vs.YUV:
-					# Chroma
-					offset = 1 << (op.format.bits_per_sample - 1)
-					plane += offset * (1 - alpha)
-					limited_range_plane = plane
-				elif have_color_range[vs.RANGE_LIMITED]:
-					# Limited-range luma
-					offset = 16 << (op.format.bits_per_sample - 8)
-					limited_range_plane = plane.copy() if have_color_range[vs.RANGE_FULL] else plane
-					limited_range_plane += offset * (1 - alpha)
+			def adapt_sample_type(plane, alpha=False):
+				if op.format.sample_type == vs.INTEGER:
+					peak_value = (1 << op.format.bits_per_sample) - 1
+					if alpha:
+						plane *= peak_value
+					return (numpy
+						.rint(plane, plane)
+						.clip(0, peak_value, plane)
+						.astype(input_dtype))
 				else:
-					# Full-range non-chroma only
-					limited_range_plane = plane
+					return plane
 
-				if plane is limited_range_plane:
-					plane = limited_range_plane = adapt_sample_type(plane)
-				else:
-					plane = adapt_sample_type(plane)
-					limited_range_plane = adapt_sample_type(limited_range_plane)
+			def solve(iplane_start, iplane_stop):
+				"""
+				Solve the ordinary least-squares problem for a number of co-sited planes.
 
-				if have_color_range[vs.RANGE_LIMITED]:
-					premultiplied_planes[vs.RANGE_LIMITED].append(limited_range_plane)
-				if have_color_range[vs.RANGE_FULL]:
-					premultiplied_planes[vs.RANGE_FULL].append(plane)
-				del plane, limited_range_plane
+				We assume that the authoring studio used a single, static overlay
+				and alpha-blended (hardsubbed) it onto a sequence of moving frames.
+				We have the clean frames and the hardsubbed ones.
+				For each individual sample, we know that::
 
-				if iplane < iplane_stop - 1:
-					cumsum_sqr_subtotal_coef += sqr_subtotal_coef[iplane - iplane_start]
-					cumsum_subtotal_prod += subtotal_prod[iplane - iplane_start]
+					hardsubbed_sample[frame 0] = overlay*alpha + clean_sample[frame 0]*(1-alpha)
+					hardsubbed_sample[frame 1] = overlay*alpha + clean_sample[frame 1]*(1-alpha)
+					hardsubbed_sample[frame 2] = overlay*alpha + clean_sample[frame 2]*(1-alpha)
+					...
 
-			alpha_planes.extend([adapt_sample_type(alpha, alpha=True)] * (iplane_stop - iplane_start))
+				So we run a least-squares linear regression for each sample
+				to find the ``alpha`` and the ``overlay*alpha``, and we're done.
 
-		split_chroma = self.split_chroma
-		if op.format.subsampling_h or op.format.subsampling_w:
-			split_chroma = True
-		elif op.format.color_family != vs.YUV:
-			split_chroma = False
+				Least-squares problems are usually written as::
 
-		if split_chroma:
-			solve(0, 1)
-			solve(1, op.format.num_planes)
-		else:
-			solve(0, op.format.num_planes)
+					a0 * x + b0 * y = c0
+					a1 * x + b1 * y = c1
+					a2 * x + b2 * y = c2
+					...
 
-		frames = []
-		for array in (alpha_planes, *[premultiplied_planes[i] for i in (0, 1) if have_color_range[i]]):
-			frame = vs.core.create_video_frame(op.format, self.left + op.width + self.right, self.top + op.height + self.bottom)
-			frames.append(frame)
+				Rearrange our equations to match this form,
+				setting ``b`` to a constant ``1`` for convenience::
 
-			props = frame.props
-			props['_FieldBased'] = vs.FIELD_PROGRESSIVE
-			if array is alpha_planes:
-				props['_ColorRange'] = vs.RANGE_FULL
-			elif op.format.sample_type == vs.INTEGER:
-				props['_ColorRange'] = premultiplied_planes.index(array)
+					hardsubbed = overlay*alpha + clean*(1-alpha)
+					hardsubbed = overlay*alpha + clean - clean*alpha
+					(-clean) * alpha + 1 * (overlay*alpha) = (hardsubbed-clean)
 
-			for iplane in range(op.format.num_planes):
-				left = self.left >> (iplane and op.format.subsampling_w)
-				right = (frame.width - self.right) >> (iplane and op.format.subsampling_w)
-				top = self.top >> (iplane and op.format.subsampling_h)
-				bottom = (frame.height - self.bottom) >> (iplane and op.format.subsampling_h)
+				thus::
 
-				if array is alpha_planes or op.format.sample_type != vs.INTEGER:
-					background = 0
-				elif iplane and op.format.color_family == vs.YUV:
-					background = 1 << (op.format.bits_per_sample - 1)
-				elif array is premultiplied_planes[vs.RANGE_LIMITED]:
-					background = 16 << (op.format.bits_per_sample - 8)
-				else:
-					background = 0
+					a = -clean     x = alpha
+					b = 1          y = overlay*alpha
+					c = hardsubbed-clean
 
-				outarray = numpy.asarray(frame[iplane])
-				outarray[:top] = background
-				outarray[top:bottom, :left] = background
-				numpy.copyto(outarray[top:bottom, left:right], array[iplane])
-				outarray[top:bottom, right:] = background
-				outarray[bottom:] = background
+				The video clips may have multiple planes (YUV, RGB).
+				We could compute the overlay's alpha mask separately for each plane,
+				but presumably, the authoring studio had a single alpha mask for the whole clip,
+				so we try to restore the single mask by combining data from all planes.
 
-		# We no longer need these, so delete them to allow them to be released if we're holding the only reference
-		del self.op, self.ncop
+				However, subsampled chroma inevitably uses a subsampled version of the alpha mask.
+				To avoid any artifacts from lossy resampling of the alpha mask,
+				we compute one mask for all the non-subsampled planes
+				and a separate mask for all the subsampled planes,
+				assuming that the subsampled planes are co-sited with each other.
+				Each ``solve`` call corresponds to one of these groups of planes.
 
-		return frames
+				When solving for multiple planes,
+				the combined least-squares problem looks like this::
+
+					a[0]    * alpha + overlay_planeA*alpha                 = c[0]
+					a[1]    * alpha + overlay_planeA*alpha                 = c[1]
+					a[2]    * alpha + overlay_planeA*alpha                 = c[2]
+					...
+					a[N+0]  * alpha         + overlay_planeB*alpha         = c[N+0]
+					a[N+1]  * alpha         + overlay_planeB*alpha         = c[N+1]
+					a[N+2]  * alpha         + overlay_planeB*alpha         = c[N+2]
+					...
+					a[2N+0] * alpha                 + overlay_planeC*alpha = c[2N+0]
+					a[2N+1] * alpha                 + overlay_planeC*alpha = c[2N+1]
+					a[2N+2] * alpha                 + overlay_planeC*alpha = c[2N+2]
+					...
+
+				and the solution consists of the following values::
+
+					alpha
+					overlay_planeA*alpha
+					overlay_planeB*alpha
+					overlay_planeC*alpha
+
+				We can rewrite this in matrix form::
+
+					M * x = c
+
+				where ``x`` is the solution vector and ``M`` is a matrix
+				containing the ``a`` in the first column plus one column per plane::
+
+					a[0]      1   0   0
+					a[1]      1   0   0
+					a[2]      1   0   0
+					...
+					a[N+0]    0   1   0
+					a[N+1]    0   1   0
+					a[N+2]    0   1   0
+					...
+					a[2N+0]   0   0   1
+					a[2N+1]   0   0   1
+					a[2N+2]   0   0   1
+					...
+
+				To obtain a least-squares solution,
+				left-multiply both sides of the equation by the transpose of ``M``::
+
+					M^T * M * x = M^T * c
+
+				After substituting ``M`` and performing the multiplications, this becomes::
+
+					( sum(all a_i^2)    sum(a_0..N-1)   sum(a_N..2N-1)   sum(a_2N..3N-1) )       ( sum(a_i * c_i)  )
+					( sum(a_0..N-1)     N               0                0               ) * x = ( sum(c_0..N-1)   )
+					( sum(a_N..2N-1)    0               N                0               )       ( sum(c_N..2N-1)  )
+					( sum(a_2N..3N-1)   0               0                N               )       ( sum(c_2N..3N-1) )
+
+				This equation can be solved analytically by inverting the square matrix.
+				It is guaranteed to be invertible unless all a_0..N-1 are equal, all a_N..2N-1 are equal, etc.
+				at the same time, that is, the background behind the hardsubs is completely static:
+				in that case, it's impossible to extract the hardsub overlay with an alpha mask,
+				because there's simply not enough data: only one independent value is observed for each plane,
+				but the sought outputs number one more (one overlay value per plane and additionally one alpha).
+
+				The analytical solution is::
+
+					    ( N (a.c) - A.C                                        )
+					x = ( S C_0 - (a.c) A_0 + ((A.C) A_0 - sum(A_i^2) C_0) / N ) / (N S - sum(A_i^2))
+					    ( S C_1 - (a.c) A_1 + ((A.C) A_1 - sum(A_i^2) C_1) / N )
+					    ( S C_2 - (a.c) A_2 + ((A.C) A_2 - sum(A_i^2) C_2) / N )
+
+				where::
+
+					S   = sum(all a_i^2)
+					A_i = sum(a_iN..iN+N-1)
+					C_i = sum(c_iN..iN+N-1)
+					p.q = sum(p_i * q_i), the dot product of p and q
+
+				As a reminder, ``N`` is the number of frames on which the hardsubbed overlay is present.
+
+				We compute this solution almost directly.
+				To improve numeric stability, observe that in this subtraction::
+
+					  (A.C) A_k - sum(A_i^2) C_k
+					= sum(A_i C_i) A_k - sum(A_i^2) C_k
+					= (... + A_k C_k) A_k - (... + A_k^2) C_k
+
+				the ``k``th terms cancel out.
+				So instead of subtracting the full sums and allowing this cancellation to occur,
+				we compute partial sums and avoid adding the the ``k``th terms in the first place.
+				"""
+
+				iplane_slice = slice(iplane_start, iplane_stop)
+				iplane_range = range(iplane_start, iplane_stop)
+
+				total_sqr_coef = sum(plane_subtotal_sqr_coef[iplane_slice])
+				dot = sum(plane_dot[iplane_slice])
+
+				sqr_subtotal_coef = [plane_subtotal_coef[iplane] ** 2 for iplane in iplane_range]
+				subtotal_prod = [plane_subtotal_coef[iplane] * plane_subtotal_val[iplane] for iplane in iplane_range]
+
+				rev_cumsum_sqr_subtotal_coef = list(accumulate(reversed(sqr_subtotal_coef), initial=0))
+				rev_cumsum_subtotal_prod = list(accumulate(reversed(subtotal_prod), initial=0))
+
+				denominator = op.num_frames * total_sqr_coef - rev_cumsum_sqr_subtotal_coef[-1]
+				n_denominator = op.num_frames * denominator
+
+				alpha = (op.num_frames * dot - rev_cumsum_subtotal_prod[-1]) / denominator
+
+				cumsum_sqr_subtotal_coef = 0
+				cumsum_subtotal_prod = 0
+				for iplane in iplane_range:
+					rest_sqr_subtotal_coef = cumsum_sqr_subtotal_coef + rev_cumsum_sqr_subtotal_coef[iplane_stop - 1 - iplane]
+					rest_subtotal_prod = cumsum_subtotal_prod + rev_cumsum_subtotal_prod[iplane_stop - 1 - iplane]
+					plane = (
+						(total_sqr_coef * plane_subtotal_val[iplane] - dot * plane_subtotal_coef[iplane]) / denominator
+						+ (rest_subtotal_prod * plane_subtotal_coef[iplane] - rest_sqr_subtotal_coef * plane_subtotal_val[iplane]) / n_denominator
+					)
+
+					if iplane and op.format.sample_type == vs.INTEGER and op.format.color_family == vs.YUV:
+						# Chroma
+						offset = 1 << (op.format.bits_per_sample - 1)
+						plane += offset * (1 - alpha)
+						limited_range_plane = plane
+					elif have_color_range[vs.RANGE_LIMITED]:
+						# Limited-range luma
+						offset = 16 << (op.format.bits_per_sample - 8)
+						limited_range_plane = plane.copy() if have_color_range[vs.RANGE_FULL] else plane
+						limited_range_plane += offset * (1 - alpha)
+					else:
+						# Full-range non-chroma only
+						limited_range_plane = plane
+
+					if plane is limited_range_plane:
+						plane = limited_range_plane = adapt_sample_type(plane)
+					else:
+						plane = adapt_sample_type(plane)
+						limited_range_plane = adapt_sample_type(limited_range_plane)
+
+					if have_color_range[vs.RANGE_LIMITED]:
+						premultiplied_planes[vs.RANGE_LIMITED].append(limited_range_plane)
+					if have_color_range[vs.RANGE_FULL]:
+						premultiplied_planes[vs.RANGE_FULL].append(plane)
+					del plane, limited_range_plane
+
+					if iplane < iplane_stop - 1:
+						cumsum_sqr_subtotal_coef += sqr_subtotal_coef[iplane - iplane_start]
+						cumsum_subtotal_prod += subtotal_prod[iplane - iplane_start]
+
+				alpha_planes.extend([adapt_sample_type(alpha, alpha=True)] * (iplane_stop - iplane_start))
+
+			split_chroma = self.split_chroma
+			if op.format.subsampling_h or op.format.subsampling_w:
+				split_chroma = True
+			elif op.format.color_family != vs.YUV:
+				split_chroma = False
+
+			if split_chroma:
+				solve(0, 1)
+				solve(1, op.format.num_planes)
+			else:
+				solve(0, op.format.num_planes)
+
+			frames = []
+			for array in (alpha_planes, *[premultiplied_planes[i] for i in (0, 1) if have_color_range[i]]):
+				frame = vs.core.create_video_frame(op.format, self.left + op.width + self.right, self.top + op.height + self.bottom)
+				frames.append(frame)
+
+				props = frame.props
+				props['_FieldBased'] = vs.FIELD_PROGRESSIVE
+				if array is alpha_planes:
+					props['_ColorRange'] = vs.RANGE_FULL
+				elif op.format.sample_type == vs.INTEGER:
+					props['_ColorRange'] = premultiplied_planes.index(array)
+
+				for iplane in range(op.format.num_planes):
+					left = self.left >> (iplane and op.format.subsampling_w)
+					right = (frame.width - self.right) >> (iplane and op.format.subsampling_w)
+					top = self.top >> (iplane and op.format.subsampling_h)
+					bottom = (frame.height - self.bottom) >> (iplane and op.format.subsampling_h)
+
+					if array is alpha_planes or op.format.sample_type != vs.INTEGER:
+						background = 0
+					elif iplane and op.format.color_family == vs.YUV:
+						background = 1 << (op.format.bits_per_sample - 1)
+					elif array is premultiplied_planes[vs.RANGE_LIMITED]:
+						background = 16 << (op.format.bits_per_sample - 8)
+					else:
+						background = 0
+
+					outarray = numpy.asarray(frame[iplane])
+					outarray[:top] = background
+					outarray[top:bottom, :left] = background
+					numpy.copyto(outarray[top:bottom, left:right], array[iplane])
+					outarray[top:bottom, right:] = background
+					outarray[bottom:] = background
+
+			# We no longer need these, so delete them to allow them to be released if we're holding the only reference
+			del self.op, self.ncop
+
+			self._frames = frames
+			return frames
 
 
 def extract_hardsubs(op: vs.VideoNode, ncop: vs.VideoNode,
